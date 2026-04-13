@@ -1037,14 +1037,22 @@
                         
                         {lines.map((line, idx) => (
                             <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-gray-50 p-2 rounded-lg">
-                                <div className="col-span-4">
+                                <div className="col-span-4 flex gap-1">
+                                    <input 
+                                        type="text"
+                                        placeholder="代碼"
+                                        value={line.accountId}
+                                        onChange={e => handleLineChange(idx, 'accountId', e.target.value)}
+                                        className="w-16 border rounded p-2 text-sm font-mono text-center focus:ring-2 focus:ring-coffee-300 outline-none placeholder-gray-300"
+                                        title="輸入科目代碼"
+                                    />
                                     <select 
                                         value={line.accountId} 
                                         onChange={e => handleLineChange(idx, 'accountId', e.target.value)}
-                                        className="w-full border rounded p-2 bg-white text-sm"
+                                        className="flex-1 w-0 border rounded p-2 bg-white text-sm focus:ring-2 focus:ring-coffee-300 outline-none truncate"
                                         required
                                     >
-                                        <option value="">選擇科目...</option>
+                                        <option value="" className="text-gray-400">選擇科目...</option>
                                         {coa.map(a => <option key={a.id} value={a.id}>{a.id} {a.name}</option>)}
                                     </select>
                                 </div>
