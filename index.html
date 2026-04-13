@@ -1,0 +1,2127 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>態度貳貳日記簿 - 專業會計系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        coffee: {
+                            50: '#FDFBF7',
+                            100: '#D7CCC8',
+                            200: '#BCAAA4',
+                            300: '#A1887F',
+                            400: '#8D6E63',
+                            500: '#6D4C41',
+                            600: '#5D2E17', // 原深咖啡
+                            700: '#4E342E',
+                            800: '#3E2723',
+                            900: '#2D1B18',
+                        },
+                        cream: '#FFFDF5',
+                    }
+                }
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #FFFDF5; }
+        .card { background: white; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up { animation: fadeInUp 0.3s ease-out forwards; }
+        .group:hover img { transform: scale(1.05) !important; transition: all 0.3s ease; }
+        
+        /* 手機版優化：隱藏捲軸但保留滾動功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* 手機版表格文字縮小 */
+        @media (max-width: 640px) {
+            .mobile-text-xs { font-size: 0.75rem; }
+            .mobile-p-2 { padding: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- 子組件：Logo ---
+        const Logo = ({ src }) => (
+            <div className="relative w-20 h-20 mr-4 overflow-hidden rounded-xl border-2 border-[#d7ccc8] bg-white shadow-inner flex items-center justify-center group cursor-pointer">
+                {src ? (
+                    <img 
+                        src={src} 
+                        alt="態度貳貳 Logo" 
+                        className="w-full h-full object-cover"
+                    />
+                ) : (
+                    <div className="w-full h-full bg-[#5D2E17] text-white flex flex-col items-center justify-center font-bold text-xs p-1 text-center leading-tight">
+                        <span className="text-xl mb-1">📷</span>
+                        點擊上傳<br/>Logo
+                    </div>
+                )}
+            </div>
+        );
+
+        // 預設會計科目 (Chart of Accounts)
+        const INITIAL_COA = [
+            { id: '1101', name: '現金', type: '資產', side: 'debit' },
+            { id: '1102', name: '銀行存款', type: '資產', side: 'debit' },
+            { id: '1201', name: '應收帳款', type: '資產', side: 'debit' },
+            { id: '1301', name: '存貨 (材料)', type: '資產', side: 'debit' },
+            { id: '2101', name: '應付帳款', type: '負債', side: 'credit' },
+            { id: '3101', name: '業主資本', type: '權益', side: 'credit' },
+            { id: '4101', name: '銷貨收入', type: '收入', side: 'credit' },
+            { id: '5101', name: '進貨成本', type: '成本', side: 'debit' },
+            { id: '6101', name: '薪資費用', type: '費用', side: 'debit' },
+            { id: '6102', name: '租金費用', type: '費用', side: 'debit' },
+            { id: '6103', name: '水電瓦斯費', type: '費用', side: 'debit' },
+            { id: '7101', name: '利息收入', type: '營業外收入', side: 'credit' },
+            { id: '8101', name: '利息費用', type: '營業外費損', side: 'debit' },
+        ];
+
+        // --- 核心計算邏輯 (共用) ---
+        const calculateBalances = (entries, coa, start, end, isCutoff = false) => {
+            const filtered = entries.filter(e => {
+                const d = new Date(e.date);
+                if (!isCutoff && start && d < start) return false;
+                if (end && d > end) return false;
+                return true;
+            });
+
+            const balances = {};
+            coa.forEach(a => balances[a.id] = { ...a, balance: 0 });
+            filtered.forEach(entry => {
+                entry.lines.forEach(line => {
+                    if (!balances[line.accountId]) return;
+                    const account = balances[line.accountId];
+                    if (account.side === 'debit') {
+                        if (line.type === 'debit') account.balance += line.amount;
+                        else account.balance -= line.amount;
+                    } else {
+                        if (line.type === 'credit') account.balance += line.amount;
+                        else account.balance -= line.amount;
+                    }
+                });
+            });
+            return balances;
+        };
+
+        const getFilterRange = (filter, customDates, currentYear) => {
+            let start, end;
+            if (filter.type === 'month') {
+                const month = parseInt(filter.value);
+                start = new Date(currentYear, month - 1, 1);
+                end = new Date(currentYear, month, 0);
+            } else if (filter.type === 'ytd') {
+                const month = parseInt(filter.value);
+                start = new Date(currentYear, 0, 1);
+                end = new Date(currentYear, month, 0);
+            } else if (filter.type === 'full-year') {
+                start = new Date(currentYear, 0, 1);
+                end = new Date(currentYear, 11, 31);
+            } else if (filter.type === 'custom') {
+                start = customDates.start ? new Date(customDates.start) : null;
+                end = customDates.end ? new Date(customDates.end) : null;
+            }
+            return { start, end };
+        };
+
+        function App() {
+            const [selectedYear, setSelectedYear] = useState(2026);
+            
+            // --- 雲端同步狀態 ---
+            const [cloudConfig, setCloudConfig] = useState(() => {
+                const saved = localStorage.getItem('dessert_cloud_config');
+                return saved ? JSON.parse(saved) : { url: '', key: '', table: 'accounting_data', userId: '' };
+            });
+            const [isSyncing, setIsSyncing] = useState(false);
+            const [lastSyncTime, setLastSyncTime] = useState(null);
+            const [isCloudModalOpen, setIsCloudModalOpen] = useState(false);
+
+            const [allEntries, setAllEntries] = useState(() => {
+                const saved = localStorage.getItem('dessert_all_entries');
+                return saved ? JSON.parse(saved) : { 2026: [], 2027: [], 2028: [], 2029: [], 2030: [], 2031: [] };
+            });
+            const entries = useMemo(() => allEntries[selectedYear] || [], [allEntries, selectedYear]);
+
+            const [coa, setCoa] = useState(() => {
+                const saved = localStorage.getItem('dessert_coa');
+                return saved ? JSON.parse(saved) : INITIAL_COA;
+            });
+            const [logo, setLogo] = useState(() => {
+                return localStorage.getItem('dessert_logo') || '';
+            });
+            const [mainTab, setMainTab] = useState('accounting'); // accounting, assets
+            const [view, setView] = useState('journal'); // journal, reports, coa
+            const [assetsData, setAssetsData] = useState(() => {
+                const saved = localStorage.getItem('dessert_assets');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [depreciationLog, setDepreciationLog] = useState(() => {
+                const saved = localStorage.getItem('dessert_dep_log');
+                return saved ? JSON.parse(saved) : {}; // { "2026-3": true, "2026-4": false }
+            });
+            const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+            const [isCropperOpen, setIsCropperOpen] = useState(false);
+            const [tempImage, setTempImage] = useState(null);
+
+            useEffect(() => {
+                localStorage.setItem('dessert_all_entries', JSON.stringify(allEntries));
+            }, [allEntries]);
+
+            useEffect(() => {
+                localStorage.setItem('dessert_coa', JSON.stringify(coa));
+            }, [coa]);
+
+            useEffect(() => {
+                localStorage.setItem('dessert_assets', JSON.stringify(assetsData));
+            }, [assetsData]);
+
+            useEffect(() => {
+                localStorage.setItem('dessert_dep_log', JSON.stringify(depreciationLog));
+            }, [depreciationLog]);
+
+            useEffect(() => {
+                if (logo) localStorage.setItem('dessert_logo', logo);
+            }, [logo]);
+
+            useEffect(() => {
+                localStorage.setItem('dessert_cloud_config', JSON.stringify(cloudConfig));
+            }, [cloudConfig]);
+
+            // --- 雲端同步邏輯 ---
+            const supabaseClient = useMemo(() => {
+                if (!cloudConfig.url || !cloudConfig.key) return null;
+                try {
+                    return supabase.createClient(cloudConfig.url, cloudConfig.key);
+                } catch (e) {
+                    console.error('Supabase init error:', e);
+                    return null;
+                }
+            }, [cloudConfig.url, cloudConfig.key]);
+
+            const pushToCloud = async (forceData = null) => {
+                if (!supabaseClient || !cloudConfig.userId) return;
+                setIsSyncing(true);
+                const dataToSync = forceData || {
+                    allEntries,
+                    coa,
+                    assetsData,
+                    depreciationLog,
+                    logo,
+                    lastUpdated: new Date().toISOString()
+                };
+                
+                try {
+                    const { error } = await supabaseClient
+                        .from(cloudConfig.table)
+                        .upsert({ 
+                            id: cloudConfig.userId, 
+                            content: dataToSync,
+                            updated_at: new Date().toISOString()
+                        });
+                    
+                    if (!error) {
+                        setLastSyncTime(new Date().toLocaleTimeString());
+                    } else {
+                        console.error('Push error:', error);
+                        alert('同步失敗: ' + error.message);
+                    }
+                } catch (e) {
+                    console.error('Cloud push failed:', e);
+                } finally {
+                    setIsSyncing(false);
+                }
+            };
+
+            const pullFromCloud = async () => {
+                if (!supabaseClient || !cloudConfig.userId) return;
+                setIsSyncing(true);
+                try {
+                    const { data, error } = await supabaseClient
+                        .from(cloudConfig.table)
+                        .select('content')
+                        .eq('id', cloudConfig.userId)
+                        .single();
+                    
+                    if (data && data.content) {
+                        const c = data.content;
+                        if (c.allEntries) setAllEntries(c.allEntries);
+                        if (c.coa) setCoa(c.coa);
+                        if (c.assetsData) setAssetsData(c.assetsData);
+                        if (c.depreciationLog) setDepreciationLog(c.depreciationLog);
+                        if (c.logo) setLogo(c.logo);
+                        setLastSyncTime(new Date().toLocaleTimeString());
+                        alert('已從雲端同步最新資料！');
+                    } else if (error && error.code === 'PGRST116') {
+                        // 沒資料，先推上去
+                        pushToCloud();
+                    } else if (error) {
+                        console.error('Pull error:', error);
+                        alert('下載失敗: ' + error.message);
+                    }
+                } catch (e) {
+                    console.error('Cloud pull failed:', e);
+                } finally {
+                    setIsSyncing(false);
+                }
+            };
+
+            const handleLogoUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (re) => {
+                        setTempImage(re.target.result);
+                        setIsCropperOpen(true);
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const addEntry = (newEntry) => {
+                setAllEntries(prev => ({
+                    ...prev,
+                    [selectedYear]: [newEntry, ...(prev[selectedYear] || [])]
+                }));
+            };
+
+            const addCoa = (newCoa) => {
+                if (coa.some(a => a.id === newCoa.id)) {
+                    alert('會計科目編號已存在！');
+                    return false;
+                }
+                setCoa([...coa, newCoa].sort((a, b) => a.id.localeCompare(b.id)));
+                return true;
+            };
+
+            const updateCoa = (updatedCoa) => {
+                setCoa(coa.map(a => a.id === updatedCoa.id ? updatedCoa : a));
+            };
+
+            const deleteCoa = (id) => {
+                const isUsed = Object.values(allEntries).flat().some(entry => entry.lines.some(line => line.accountId === id));
+                if (isUsed) {
+                    alert('此科目已有交易紀錄，無法刪除！');
+                    return;
+                }
+                if (confirm('確定要刪除此會計科目嗎？')) {
+                    setCoa(coa.filter(a => a.id !== id));
+                }
+            };
+
+            return (
+                <div className="min-h-screen p-4 md:p-8">
+                    <header className="max-w-5xl mx-auto mb-8">
+                        <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-8 pb-6 border-b border-coffee-100">
+                            <div className="flex items-center">
+                                <label className="cursor-pointer">
+                                    <Logo src={logo} />
+                                    <input 
+                                        type="file" 
+                                        className="hidden" 
+                                        accept="image/*"
+                                        onChange={handleLogoUpload}
+                                    />
+                                </label>
+                                <div>
+                                    <h1 className="text-3xl font-bold text-coffee-600 drop-shadow-sm">
+                                        {mainTab === 'accounting' ? '態度貳貳日記簿' : '態度貳貳資產總表'}
+                                    </h1>
+                                    <p className="text-gray-500 text-sm">
+                                        {mainTab === 'accounting' ? '正式會計簿記 · 甜點店專屬' : '固定資產管理 · 折舊自動計算'}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="flex bg-coffee-50 p-1 rounded-2xl border border-coffee-100 shadow-inner">
+                                <button 
+                                    onClick={() => setMainTab('accounting')}
+                                    className={`px-6 py-2.5 rounded-xl transition-all duration-300 font-bold flex items-center gap-2 ${mainTab === 'accounting' ? 'bg-coffee-600 text-white shadow-lg scale-105' : 'text-coffee-400 hover:text-coffee-600'}`}
+                                >
+                                    <span>📝</span> 記帳系統
+                                </button>
+                                <button 
+                                    onClick={() => setMainTab('assets')}
+                                    className={`px-6 py-2.5 rounded-xl transition-all duration-300 font-bold flex items-center gap-2 ${mainTab === 'assets' ? 'bg-coffee-600 text-white shadow-lg scale-105' : 'text-coffee-400 hover:text-coffee-600'}`}
+                                >
+                                    <span>⚖️</span> 資產總表
+                                </button>
+                            </div>
+                        </div>
+
+                        {mainTab === 'accounting' && (
+                            <div className="flex flex-wrap justify-between items-center gap-4 animate-fade-in">
+                                <nav className="flex bg-white p-1 rounded-xl shadow-sm border border-coffee-100 overflow-x-auto no-scrollbar max-w-full">
+                                    <button 
+                                        onClick={() => setView('journal')}
+                                        className={`px-4 py-2 rounded-lg transition text-sm font-medium whitespace-nowrap ${view === 'journal' ? 'bg-coffee-600 text-white shadow-md' : 'text-coffee-400 hover:bg-coffee-50'}`}
+                                    >
+                                        日記簿
+                                    </button>
+                                    <button 
+                                        onClick={() => setView('reports')}
+                                        className={`px-4 py-2 rounded-lg transition text-sm font-medium whitespace-nowrap ${view === 'reports' ? 'bg-coffee-600 text-white shadow-md' : 'text-coffee-400 hover:bg-coffee-50'}`}
+                                    >
+                                        財務報表
+                                    </button>
+                                    <button 
+                                        onClick={() => setView('coa')}
+                                        className={`px-4 py-2 rounded-lg transition text-sm font-medium whitespace-nowrap ${view === 'coa' ? 'bg-coffee-600 text-white shadow-md' : 'text-coffee-400 hover:bg-coffee-50'}`}
+                                    >
+                                        會計科目
+                                    </button>
+                                </nav>
+                                <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-coffee-100 shadow-sm">
+                                        <span className="text-xs font-bold text-coffee-400">當前年度:</span>
+                                        <select 
+                                            value={selectedYear} 
+                                            onChange={(e) => setSelectedYear(Number(e.target.value))}
+                                            className="bg-transparent text-sm font-bold text-coffee-600 outline-none cursor-pointer"
+                                        >
+                                            {[2026, 2027, 2028, 2029, 2030, 2031].map(y => (
+                                                <option key={y} value={y}>{y} 年度</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button 
+                                            onClick={() => setIsCloudModalOpen(true)}
+                                            className={`p-2 rounded-lg border shadow-sm font-medium flex items-center gap-2 transition ${cloudConfig.url ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+                                            title="雲端同步設定"
+                                        >
+                                            {isSyncing ? '🔄' : (cloudConfig.url ? '☁️' : '☁️?')} 同步
+                                        </button>
+                                        <button 
+                                            onClick={() => setIsExportModalOpen(true)}
+                                            className="p-2 bg-coffee-600 text-white rounded-lg border border-coffee-700 hover:bg-coffee-700 shadow-sm font-medium flex items-center gap-2"
+                                            title="匯出報表與資料"
+                                        >
+                                            📥 匯出
+                                        </button>
+                                        <label className="p-2 bg-white text-gray-500 rounded-lg border border-gray-200 hover:bg-gray-50 shadow-sm cursor-pointer" title="匯入備份">
+                                            📤 匯入
+                                            <input 
+                                                type="file" 
+                                                className="hidden" 
+                                                accept=".json"
+                                                onChange={(e) => {
+                                                    const file = e.target.files[0];
+                                                    if (file) {
+                                                        const reader = new FileReader();
+                                                        reader.onload = (re) => {
+                                                            try {
+                                                                const imported = JSON.parse(re.target.result);
+                                                                if (typeof imported === 'object' && !Array.isArray(imported)) {
+                                                                    setAllEntries(imported);
+                                                                    alert('匯入成功！');
+                                                                } else if (Array.isArray(imported)) {
+                                                                    // 相容舊格式
+                                                                    setAllEntries({ ...allEntries, [selectedYear]: imported });
+                                                                    alert('匯入成功（已存入當前年度）！');
+                                                                }
+                                                            } catch (err) {
+                                                                alert('檔案格式錯誤');
+                                                            }
+                                                        };
+                                                        reader.readAsText(file);
+                                                    }
+                                                }}
+                                            />
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </header>
+
+                    <main className="max-w-5xl mx-auto">
+                        {mainTab === 'accounting' ? (
+                            <>
+                                {view === 'journal' && <JournalView entries={entries} coa={coa} onAddEntry={addEntry} selectedYear={selectedYear} />}
+                                {view === 'reports' && <ReportsView allEntries={allEntries} coa={coa} selectedYear={selectedYear} />}
+                                {view === 'coa' && <CoaView coa={coa} onAddCoa={addCoa} onUpdateCoa={updateCoa} onDeleteCoa={deleteCoa} />}
+                            </>
+                        ) : (
+                            <AssetsView 
+                                assets={assetsData} 
+                                setAssets={setAssetsData} 
+                                selectedYear={selectedYear} 
+                                setSelectedYear={setSelectedYear} 
+                                depreciationLog={depreciationLog}
+                                setDepreciationLog={setDepreciationLog}
+                            />
+                        )}
+                    </main>
+
+                    {isExportModalOpen && (
+                        <ExportModal 
+                            onClose={() => setIsExportModalOpen(false)} 
+                            allEntries={allEntries} 
+                            coa={coa} 
+                            selectedYear={selectedYear}
+                        />
+                    )}
+
+                    {isCloudModalOpen && (
+                        <CloudSyncModal 
+                            config={cloudConfig} 
+                            setConfig={setCloudConfig} 
+                            onClose={() => setIsCloudModalOpen(false)} 
+                            onPush={() => pushToCloud()}
+                            onPull={pullFromCloud}
+                            isSyncing={isSyncing}
+                            lastSyncTime={lastSyncTime}
+                        />
+                    )}
+
+                    {isCropperOpen && (
+                        <LogoCropper 
+                            image={tempImage} 
+                            onCrop={(cropped) => {
+                                setLogo(cropped);
+                                setIsCropperOpen(false);
+                            }}
+                            onCancel={() => setIsCropperOpen(false)}
+                        />
+                    )}
+                </div>
+            );
+        }
+
+        // --- 子組件：雲端同步設定 ---
+        function CloudSyncModal({ config, setConfig, onClose, onPush, onPull, isSyncing, lastSyncTime }) {
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-fade-in-up">
+                        <div className="p-4 border-b flex justify-between items-center bg-emerald-50">
+                            <h3 className="font-bold text-emerald-700 flex items-center gap-2">
+                                <span>☁️</span> 雲端即時同步設定
+                            </h3>
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs text-amber-700 leading-relaxed">
+                                💡 此功能目前支援 <strong>Supabase</strong> 雲端資料庫。設定完成後，不同電腦、手機點開網頁即可即時同步資料。
+                            </div>
+                            
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Supabase URL</label>
+                                    <input 
+                                        type="text" 
+                                        value={config.url} 
+                                        onChange={e => setConfig({...config, url: e.target.value})}
+                                        className="w-full border rounded-lg p-2 text-sm font-mono"
+                                        placeholder="https://xxx.supabase.co"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Anon Key</label>
+                                    <input 
+                                        type="password" 
+                                        value={config.key} 
+                                        onChange={e => setConfig({...config, key: e.target.value})}
+                                        className="w-full border rounded-lg p-2 text-sm font-mono"
+                                        placeholder="eyJhbGciOiJIUzI1NiIsInR..."
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">店舖專屬 ID (建議設為手機號碼)</label>
+                                    <input 
+                                        type="text" 
+                                        value={config.userId} 
+                                        onChange={e => setConfig({...config, userId: e.target.value})}
+                                        className="w-full border rounded-lg p-2 text-sm font-bold text-coffee-600"
+                                        placeholder="例如: 0912345678"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="pt-4 flex flex-col gap-2">
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={onPull}
+                                        disabled={!config.url || isSyncing}
+                                        className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-md transition disabled:bg-gray-200"
+                                    >
+                                        {isSyncing ? '同步中...' : '從雲端下載'}
+                                    </button>
+                                    <button 
+                                        onClick={onPush}
+                                        disabled={!config.url || isSyncing}
+                                        className="flex-1 py-3 border-2 border-emerald-600 text-emerald-600 rounded-xl font-bold hover:bg-emerald-50 transition disabled:border-gray-200 disabled:text-gray-300"
+                                    >
+                                        上傳至雲端
+                                    </button>
+                                </div>
+                                {lastSyncTime && (
+                                    <div className="text-center text-[10px] text-gray-400">
+                                        上次同步時間: {lastSyncTime}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="mt-4 pt-4 border-t text-[10px] text-gray-400">
+                                <p className="font-bold mb-1">如何獲取金鑰？</p>
+                                <ol className="list-decimal ml-4 space-y-1">
+                                    <li>前往 <a href="https://supabase.com" target="_blank" className="text-blue-400 underline">supabase.com</a> 註冊免費帳號</li>
+                                    <li>建立新專案並在 Settings &gt; API 找到 URL 與 Anon Key</li>
+                                    <li>在 SQL Editor 執行：<code className="bg-gray-100 px-1">create table accounting_data (id text primary key, content jsonb, updated_at timestamp with time zone default now());</code></li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 子組件：Logo 裁切器 ---
+        function LogoCropper({ image, onCrop, onCancel }) {
+            const [pos, setPos] = useState({ x: 50, y: 50, scale: 1.5 });
+            const imgRef = React.useRef(null);
+            const containerRef = React.useRef(null);
+
+            const handleWheel = (e) => {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? -0.1 : 0.1;
+                setPos(prev => ({ ...prev, scale: Math.max(0.5, Math.min(5, prev.scale + delta)) }));
+            };
+
+            const handleMouseMove = (e) => {
+                if (e.buttons !== 1) return;
+                const rect = containerRef.current.getBoundingClientRect();
+                const x = ((e.clientX - rect.left) / rect.width) * 100;
+                const y = ((e.clientY - rect.top) / rect.height) * 100;
+                setPos(prev => ({ ...prev, x, y }));
+            };
+
+            const doCrop = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 400;
+                canvas.height = 400;
+                const ctx = canvas.getContext('2d');
+                
+                const img = imgRef.current;
+                const cw = 400;
+                const ch = 400;
+                
+                // 計算裁切區域
+                const scale = pos.scale;
+                const iw = img.naturalWidth;
+                const ih = img.naturalHeight;
+                
+                // 模擬 object-cover 的計算
+                const ratio = Math.max(cw / iw, ch / ih) * scale;
+                const dw = iw * ratio;
+                const dh = ih * ratio;
+                
+                const dx = (cw / 2) - (pos.x / 100) * dw;
+                const dy = (ch / 2) - (pos.y / 100) * dh;
+
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, 400, 400);
+                ctx.drawImage(img, dx, dy, dw, dh);
+                
+                onCrop(canvas.toDataURL('image/png'));
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-[100] p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-fade-in-up">
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold text-gray-700">調整 Logo 顯示區域</h3>
+                            <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+                        </div>
+                        
+                        <div className="p-8 flex flex-col items-center">
+                            <div className="mb-6 text-sm text-gray-500 text-center">
+                                🖱️ 使用滑鼠滾輪縮放，按住左鍵拖動圖片位置<br/>
+                                <span className="text-coffee-600 font-medium">清楚無遮蔽的區域為最終顯示範圍</span>
+                            </div>
+
+                            {/* 裁切預覽區 */}
+                            <div 
+                                ref={containerRef}
+                                className="relative w-64 h-64 border-4 border-coffee-600 rounded-xl overflow-hidden cursor-move bg-gray-200 shadow-2xl"
+                                onWheel={handleWheel}
+                                onMouseMove={handleMouseMove}
+                            >
+                                <img 
+                                    ref={imgRef}
+                                    src={image} 
+                                    className="absolute max-none pointer-events-none"
+                                    style={{
+                                        width: `${pos.scale * 100}%`,
+                                        height: 'auto',
+                                        top: `${pos.y}%`,
+                                        left: `${pos.x}%`,
+                                        transform: 'translate(-50%, -50%)',
+                                        transition: 'none'
+                                    }}
+                                />
+                                {/* 遮罩層：中間方形透明，四周半透明灰色 */}
+                                <div className="absolute inset-0 pointer-events-none ring-[100px] ring-black ring-opacity-40"></div>
+                            </div>
+
+                            <div className="mt-8 flex gap-4 w-full">
+                                <button onClick={onCancel} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50">取消</button>
+                                <button onClick={doCrop} className="flex-1 py-3 bg-[#5D2E17] text-white rounded-xl font-bold hover:bg-[#3E1C0D] shadow-lg">確認裁切並儲存</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 子組件 ---
+
+        function JournalView({ entries, coa, onAddEntry, selectedYear }) {
+            const [showForm, setShowForm] = useState(false);
+
+            return (
+                <div className="space-y-6">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-xl font-semibold text-gray-700">{selectedYear} 年度 普通日記簿</h2>
+                        <button 
+                            onClick={() => setShowForm(!showForm)}
+                            className="bg-coffee-600 text-white px-4 py-2 rounded-lg shadow hover:bg-coffee-700 transition flex items-center gap-2"
+                        >
+                            {showForm ? '取消' : '➕ 新增傳票'}
+                        </button>
+                    </div>
+
+                    {showForm && (
+                        <div className="card p-6 border-2 border-coffee-100">
+                            <h3 className="text-lg font-medium mb-4 text-coffee-700">記下一筆交易 ({selectedYear}年)</h3>
+                            <EntryForm coa={coa} entries={entries} selectedYear={selectedYear} onSave={(e) => { onAddEntry(e); setShowForm(false); }} />
+                        </div>
+                    )}
+
+                    <div className="card overflow-hidden">
+                        <table className="w-full text-left border-collapse">
+                            <thead className="bg-coffee-50 text-coffee-700">
+                                <tr>
+                                    <th className="p-4 border-b">傳票編號 / 日期</th>
+                                    <th className="p-4 border-b">總摘要</th>
+                                    <th className="p-4 border-b">會計科目</th>
+                                    <th className="p-4 border-b">摘要</th>
+                                    <th className="p-4 border-b text-right">借方</th>
+                                    <th className="p-4 border-b text-right">貸方</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {entries.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="6" className="p-8 text-center text-gray-400 italic">尚未有任何交易紀錄</td>
+                                    </tr>
+                                ) : (
+                                    entries.map(entry => (
+                                        <React.Fragment key={entry.id}>
+                                            {entry.lines.map((line, idx) => (
+                                                <tr key={idx} className="border-b last:border-b-0 hover:bg-gray-50">
+                                                    {idx === 0 && (
+                                                        <>
+                                                            <td className="p-4 font-medium text-gray-600 align-top" rowSpan={entry.lines.length}>
+                                                                <div className="text-coffee-600 font-mono text-sm font-bold">#{entry.id}</div>
+                                                                <div className="text-[10px] text-gray-400 font-normal mt-0.5">{entry.date}</div>
+                                                            </td>
+                                                            <td className="p-4 text-base font-medium text-gray-800 align-top" rowSpan={entry.lines.length}>
+                                                                {entry.description}
+                                                            </td>
+                                                        </>
+                                                    )}
+                                                    <td className={`p-4 ${line.type === 'credit' ? 'pl-12' : 'pl-4'}`}>
+                                                        <span className="font-medium text-gray-700">{line.accountName}</span>
+                                                    </td>
+                                                    <td className="p-4 text-sm text-gray-400 italic">
+                                                        {line.lineDescription || ''}
+                                                    </td>
+                                                    <td className="p-4 text-right font-mono">
+                                                        {line.type === 'debit' ? line.amount.toLocaleString() : ''}
+                                                    </td>
+                                                    <td className="p-4 text-right font-mono">
+                                                        {line.type === 'credit' ? line.amount.toLocaleString() : ''}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </React.Fragment>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        function EntryForm({ coa, entries, onSave, selectedYear }) {
+            const [date, setDate] = useState(`${selectedYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`);
+            const [description, setDescription] = useState('');
+            const [lines, setLines] = useState([
+                { accountId: '', amount: 0, type: 'debit', lineDescription: '' },
+                { accountId: '', amount: 0, type: 'credit', lineDescription: '' }
+            ]);
+
+            useEffect(() => {
+                // 當切換年度時，更新日期選擇器的預設年度
+                const today = new Date();
+                const mm = String(today.getMonth() + 1).padStart(2, '0');
+                const dd = String(today.getDate()).padStart(2, '0');
+                setDate(`${selectedYear}-${mm}-${dd}`);
+            }, [selectedYear]);
+
+            const totalDebit = lines.filter(l => l.type === 'debit').reduce((sum, l) => sum + Number(l.amount), 0);
+            const totalCredit = lines.filter(l => l.type === 'credit').reduce((sum, l) => sum + Number(l.amount), 0);
+            const isBalanced = totalDebit === totalCredit && totalDebit > 0;
+
+            const generateVoucherId = (selectedDate) => {
+                // 格式：YYMMDDNN (前兩碼西元後兩位, 再來月份兩碼, 日期兩碼, 最後2碼序號)
+                const d = new Date(selectedDate);
+                const yy = String(d.getFullYear()).slice(-2);
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                const datePrefix = `${yy}${mm}${dd}`;
+
+                // 找當天現有的最大序號
+                const todayVouchers = entries
+                    .filter(e => e.date === selectedDate)
+                    .map(e => e.id)
+                    .filter(id => id.startsWith(datePrefix));
+                
+                let nextSeq = 1;
+                if (todayVouchers.length > 0) {
+                    const maxSeq = Math.max(...todayVouchers.map(id => parseInt(id.slice(-2), 10)));
+                    nextSeq = maxSeq + 1;
+                }
+
+                return `${datePrefix}${String(nextSeq).padStart(2, '0')}`;
+            };
+
+            const handleLineChange = (index, field, value) => {
+                const newLines = [...lines];
+                newLines[index][field] = value;
+                setLines(newLines);
+            };
+
+            const addLine = (type) => {
+                setLines([...lines, { accountId: '', amount: 0, type, lineDescription: '' }]);
+            };
+
+            const removeLine = (index) => {
+                if (lines.length > 2) {
+                    setLines(lines.filter((_, i) => i !== index));
+                }
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!isBalanced) return;
+
+                const voucherId = generateVoucherId(date);
+
+                const entry = {
+                    id: voucherId,
+                    date,
+                    description,
+                    lines: lines.map(l => ({
+                        ...l,
+                        accountName: coa.find(a => a.id === l.accountId)?.name || '未知名稱'
+                    }))
+                };
+                onSave(entry);
+            };
+
+            return (
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">交易日期</label>
+                            <input 
+                                type="date" 
+                                value={date} 
+                                onChange={e => setDate(e.target.value)}
+                                className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-coffee-300 outline-none"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">總摘要</label>
+                            <input 
+                                type="text" 
+                                value={description} 
+                                onChange={e => setDescription(e.target.value)}
+                                placeholder="例如：購買麵粉、今日營收..."
+                                className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-coffee-300 outline-none"
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <div className="grid grid-cols-12 gap-2 text-sm font-bold text-gray-500 uppercase tracking-wider px-2">
+                            <div className="col-span-4">會計科目</div>
+                            <div className="col-span-3">摘要</div>
+                            <div className="col-span-2 text-right">借方金額</div>
+                            <div className="col-span-2 text-right">貸方金額</div>
+                        </div>
+                        
+                        {lines.map((line, idx) => (
+                            <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-gray-50 p-2 rounded-lg">
+                                <div className="col-span-4">
+                                    <select 
+                                        value={line.accountId} 
+                                        onChange={e => handleLineChange(idx, 'accountId', e.target.value)}
+                                        className="w-full border rounded p-2 bg-white text-sm"
+                                        required
+                                    >
+                                        <option value="">選擇科目...</option>
+                                        {coa.map(a => <option key={a.id} value={a.id}>{a.id} {a.name}</option>)}
+                                    </select>
+                                </div>
+                                
+                                <div className="col-span-3">
+                                    <input 
+                                        type="text" 
+                                        value={line.lineDescription} 
+                                        onChange={e => handleLineChange(idx, 'lineDescription', e.target.value)}
+                                        placeholder="行摘要..."
+                                        className="w-full border rounded p-2 text-sm"
+                                    />
+                                </div>
+
+                                <div className="col-span-2">
+                                    <input 
+                                        type="number" 
+                                        value={line.amount || ''} 
+                                        onChange={e => handleLineChange(idx, 'amount', Number(e.target.value))}
+                                        placeholder={line.type === 'debit' ? '借方' : '貸方'}
+                                        className={`w-full border rounded p-2 text-right text-sm ${line.type === 'debit' ? 'border-blue-200' : 'border-red-200'}`}
+                                        required
+                                    />
+                                </div>
+
+                                <div className="col-span-2 flex gap-1 items-center">
+                                    <select 
+                                        value={line.type} 
+                                        onChange={e => handleLineChange(idx, 'type', e.target.value)}
+                                        className="text-xs border rounded p-1 flex-1"
+                                    >
+                                        <option value="debit">借</option>
+                                        <option value="credit">貸</option>
+                                    </select>
+                                    <button 
+                                        type="button" 
+                                        onClick={() => removeLine(idx)}
+                                        className="text-red-400 hover:text-red-600 p-1"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="flex justify-between items-center pt-4 border-t">
+                        <div className="flex gap-4">
+                            <button type="button" onClick={() => addLine('debit')} className="text-sm text-blue-600 hover:underline">+ 增加借方</button>
+                            <button type="button" onClick={() => addLine('credit')} className="text-sm text-red-600 hover:underline">+ 增加貸方</button>
+                        </div>
+                        <div className="text-right">
+                            <div className="text-sm space-x-4">
+                                <span className={totalDebit === totalCredit ? 'text-green-600' : 'text-red-500'}>
+                                    借貸平衡：{totalDebit.toLocaleString()} / {totalCredit.toLocaleString()}
+                                </span>
+                            </div>
+                            <button 
+                                type="submit" 
+                                disabled={!isBalanced}
+                                className={`mt-2 px-6 py-2 rounded-lg font-bold shadow ${isBalanced ? 'bg-coffee-600 text-white hover:bg-coffee-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+                            >
+                                儲存分錄
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            );
+        }
+
+        function ReportsView({ allEntries, coa, selectedYear }) {
+            const [isFilter, setIsFilter] = useState({ type: 'month', value: String(new Date().getMonth() + 1) });
+            const [isCustomDates, setIsCustomDates] = useState({ start: '', end: '' });
+            const [bsFilter, setBsFilter] = useState({ type: 'all', value: '' });
+            const [bsCustomDates, setBsCustomDates] = useState({ start: '', end: '' });
+
+            const currentYear = selectedYear;
+
+            // 損益表 (IS) 的資料與計算 - 僅限當前年度
+            const isLedger = useMemo(() => {
+                const entries = allEntries[selectedYear] || [];
+                const { start, end } = getFilterRange(isFilter, isCustomDates, currentYear);
+                return calculateBalances(entries, coa, start, end);
+            }, [allEntries, coa, isFilter, isCustomDates, currentYear, selectedYear]);
+
+            // 資產負債表 (BS) 的資料與計算 - 自動結轉：包含當前年度及之前所有年度的資料
+            const bsLedger = useMemo(() => {
+                const years = Object.keys(allEntries).map(Number).filter(y => y <= selectedYear).sort();
+                const cumulativeEntries = years.flatMap(y => allEntries[y]);
+                const { end } = getFilterRange(bsFilter, bsCustomDates, currentYear);
+                return calculateBalances(cumulativeEntries, coa, null, end, true);
+            }, [allEntries, coa, bsFilter, bsCustomDates, currentYear, selectedYear]);
+
+            // 損益表各項數值
+            const revenue = Object.values(isLedger).filter(a => a.type === '收入');
+            const cost = Object.values(isLedger).filter(a => a.type === '成本');
+            const expense = Object.values(isLedger).filter(a => a.type === '費用');
+            const nonOpRevenue = Object.values(isLedger).filter(a => a.type === '營業外收入');
+            const nonOpExpense = Object.values(isLedger).filter(a => a.type === '營業外費損');
+
+            const grossProfit = revenue.reduce((sum, a) => sum + a.balance, 0) - cost.reduce((sum, a) => sum + a.balance, 0);
+            const opIncome = grossProfit - expense.reduce((sum, a) => sum + a.balance, 0);
+            const isNetIncome = opIncome + nonOpRevenue.reduce((sum, a) => sum + a.balance, 0) - nonOpExpense.reduce((sum, a) => sum + a.balance, 0);
+
+            // 資產負債表各項數值 (BS 淨利應包含歷史累積至今的所有損益科目餘額)
+            const assets = Object.values(bsLedger).filter(a => a.type === '資產');
+            const liabilities = Object.values(bsLedger).filter(a => a.type === '負債');
+            const equity = Object.values(bsLedger).filter(a => a.type === '權益');
+            const bsNetIncome = Object.values(bsLedger).filter(a => ['收入', '成本', '費用', '營業外收入', '營業外費損'].includes(a.type))
+                .reduce((sum, a) => {
+                    if (a.side === 'credit') return sum + a.balance;
+                    return sum - a.balance;
+                }, 0);
+
+            const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
+            const totalLiabilities = liabilities.reduce((sum, a) => sum + a.balance, 0);
+            const totalEquity = equity.reduce((sum, a) => sum + a.balance, 0);
+
+            const PeriodSelector = ({ filter, setFilter, customDates, setCustomDates, label, mode = 'range' }) => (
+                <div className="mb-4 space-y-2">
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider">{label}</label>
+                    <div className="flex flex-wrap gap-2 items-center">
+                        <select 
+                            className="border rounded-lg p-1.5 bg-gray-50 text-xs focus:ring-2 focus:ring-coffee-200 outline-none"
+                            value={`${filter.type}-${filter.value}`}
+                            onChange={(e) => {
+                                const [type, value] = e.target.value.split('-');
+                                setFilter({ type, value });
+                            }}
+                        >
+                            <option value="all-">{mode === 'cutoff' ? '創店至今' : '全部期間'}</option>
+                            <optgroup label={mode === 'cutoff' ? '截至月份' : '單月報表'}>
+                                {[...Array(12)].map((_, i) => (
+                                    <option key={i} value={`month-${i+1}`}>{mode === 'cutoff' ? `截至 ${i+1} 月底` : `${i+1} 月份`}</option>
+                                ))}
+                            </optgroup>
+                            {mode === 'range' && (
+                                <optgroup label="年初至今 (YTD)">
+                                    {[...Array(12)].map((_, i) => (
+                                        <option key={i} value={`ytd-${i+1}`}>年初到 {i+1} 月</option>
+                                    ))}
+                                </optgroup>
+                            )}
+                            <option value="full-year-">{mode === 'cutoff' ? `截至全年度 (${currentYear}) 底` : `全年度 (${currentYear})`}</option>
+                            <option value="custom-">{mode === 'cutoff' ? '自訂截止日' : '自訂時間段'}</option>
+                        </select>
+                        {filter.type === 'custom' && (
+                            <div className="flex gap-1 items-center">
+                                {mode === 'range' && (
+                                    <>
+                                        <input type="date" className="border rounded p-1 text-[10px]" value={customDates.start} onChange={e => setCustomDates({...customDates, start: e.target.value})} />
+                                        <span className="text-gray-300">-</span>
+                                    </>
+                                )}
+                                <input type="date" className="border rounded p-1 text-[10px]" value={customDates.end} onChange={e => setCustomDates({...customDates, end: e.target.value})} />
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* 損益表卡片 */}
+                    <div className="card p-6 border border-coffee-100">
+                        <div className="flex justify-between items-start mb-4 border-b pb-2">
+                            <h3 className="text-xl font-bold text-coffee-700">損益表 (Income Statement)</h3>
+                        </div>
+                        
+                        <PeriodSelector 
+                            label="損益計算期間"
+                            mode="range"
+                            filter={isFilter} 
+                            setFilter={setIsFilter} 
+                            customDates={isCustomDates} 
+                            setCustomDates={setIsCustomDates} 
+                        />
+
+                        <div className="space-y-2">
+                            <div className="font-bold text-gray-700">營業收入</div>
+                            {revenue.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-sm">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+                            <div className="font-bold text-gray-700 mt-2">營業成本</div>
+                            {cost.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-sm">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+                            <div className="flex justify-between font-bold border-t pt-1 mt-1 text-gray-600">
+                                <span>營業毛利</span>
+                                <span>{grossProfit.toLocaleString()}</span>
+                            </div>
+
+                            <div className="font-bold text-gray-700 mt-4">營業費用</div>
+                            {expense.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-xs">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+                            <div className="flex justify-between font-bold border-t pt-1 mt-1 text-gray-600">
+                                <span>營業利益</span>
+                                <span>{opIncome.toLocaleString()}</span>
+                            </div>
+
+                            <div className="font-bold text-gray-700 mt-4">營業外收支</div>
+                            {nonOpRevenue.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-xs">
+                                    <span>{a.name}</span>
+                                    <span className="text-green-600">+{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+                            {nonOpExpense.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-xs">
+                                    <span>{a.name}</span>
+                                    <span className="text-red-600">-{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+
+                            <div className="border-t-2 border-coffee-200 pt-2 mt-4 flex justify-between font-bold text-lg text-coffee-600">
+                                <span>本期淨利</span>
+                                <span>{isNetIncome.toLocaleString()}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 資產負債表卡片 */}
+                    <div className="card p-6 border border-blue-100">
+                        <div className="flex justify-between items-start mb-4 border-b pb-2">
+                            <h3 className="text-xl font-bold text-blue-700">資產負債表 (Balance Sheet)</h3>
+                        </div>
+
+                        <PeriodSelector 
+                            label="結算截止日期"
+                            mode="cutoff"
+                            filter={bsFilter} 
+                            setFilter={setBsFilter} 
+                            customDates={bsCustomDates} 
+                            setCustomDates={setBsCustomDates} 
+                        />
+
+                        <div className="space-y-2">
+                            <div className="font-bold text-gray-700">資產</div>
+                            {assets.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-sm">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+                            <div className="font-bold text-gray-700 mt-4">負債</div>
+                            {liabilities.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-sm">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+                            <div className="font-bold text-gray-700 mt-4">權益 (含累積淨利)</div>
+                            {equity.map(a => (
+                                <div key={a.id} className="flex justify-between pl-4 text-sm">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+                            <div className="flex justify-between pl-4 italic text-gray-500 text-sm">
+                                <span>累積淨利 (至結算日)</span>
+                                <span>{bsNetIncome.toLocaleString()}</span>
+                            </div>
+                            <div className="border-t-2 border-blue-200 pt-2 mt-4 flex justify-between font-bold text-lg text-blue-600">
+                                <span>資產總計</span>
+                                <span>{totalAssets.toLocaleString()}</span>
+                            </div>
+                            <div className="flex justify-between font-bold text-lg text-indigo-600">
+                                <span>負債與權益總計</span>
+                                <span>{(totalLiabilities + totalEquity + bsNetIncome).toLocaleString()}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function CoaView({ coa, onAddCoa, onUpdateCoa, onDeleteCoa }) {
+            const [isAdding, setIsAdding] = useState(false);
+            const [editingId, setEditingId] = useState(null);
+            
+            const [formData, setFormData] = useState({ id: '', name: '', type: '資產', side: 'debit' });
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (editingId) {
+                    onUpdateCoa(formData);
+                    setEditingId(null);
+                } else {
+                    const success = onAddCoa(formData);
+                    if (!success) return;
+                }
+                setIsAdding(false);
+                setFormData({ id: '', name: '', type: '資產', side: 'debit' });
+            };
+
+            const startEdit = (a) => {
+                setFormData(a);
+                setEditingId(a.id);
+                setIsAdding(true);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-xl font-semibold text-gray-700">會計科目管理 (Chart of Accounts)</h2>
+                        <button 
+                            onClick={() => { setIsAdding(!isAdding); setEditingId(null); setFormData({ id: '', name: '', type: '資產', side: 'debit' }); }}
+                            className="bg-coffee-600 text-white px-4 py-2 rounded-lg shadow hover:bg-coffee-700 transition flex items-center gap-2"
+                        >
+                            {isAdding ? '取消' : '➕ 新增科目'}
+                        </button>
+                    </div>
+
+                    {isAdding && (
+                        <div className="card p-6 border-2 border-coffee-100 mb-6">
+                            <h3 className="text-lg font-medium mb-4 text-coffee-700">{editingId ? '編輯科目' : '新增科目'}</h3>
+                            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-600 mb-1">編號</label>
+                                    <input 
+                                        type="text" 
+                                        value={formData.id} 
+                                        onChange={e => setFormData({...formData, id: e.target.value})}
+                                        className="w-full border rounded p-2"
+                                        placeholder="例如: 1101"
+                                        required
+                                        disabled={!!editingId}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-600 mb-1">名稱</label>
+                                    <input 
+                                        type="text" 
+                                        value={formData.name} 
+                                        onChange={e => setFormData({...formData, name: e.target.value})}
+                                        className="w-full border rounded p-2"
+                                        placeholder="例如: 現金"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-600 mb-1">類別</label>
+                                    <select 
+                                        value={formData.type} 
+                                        onChange={e => setFormData({...formData, type: e.target.value})}
+                                        className="w-full border rounded p-2"
+                                    >
+                                        <option value="資產">資產</option>
+                                        <option value="負債">負債</option>
+                                        <option value="權益">權益</option>
+                                        <option value="收入">收入</option>
+                                        <option value="成本">成本</option>
+                                        <option value="費用">費用</option>
+                                        <option value="營業外收入">營業外收入</option>
+                                        <option value="營業外費損">營業外費損</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-600 mb-1">正常方向</label>
+                                    <select 
+                                        value={formData.side} 
+                                        onChange={e => setFormData({...formData, side: e.target.value})}
+                                        className="w-full border rounded p-2"
+                                    >
+                                        <option value="debit">借方 (Debit)</option>
+                                        <option value="credit">貸方 (Credit)</option>
+                                    </select>
+                                </div>
+                                <button type="submit" className="bg-coffee-600 text-white p-2 rounded hover:bg-coffee-700 transition font-bold">
+                                    {editingId ? '更新' : '確認新增'}
+                                </button>
+                            </form>
+                        </div>
+                    )}
+
+                    <div className="card overflow-hidden">
+                        <table className="w-full text-left border-collapse">
+                            <thead className="bg-gray-100">
+                                <tr>
+                                    <th className="p-4 border-b">編號</th>
+                                    <th className="p-4 border-b">科目名稱</th>
+                                    <th className="p-4 border-b">類別</th>
+                                    <th className="p-4 border-b">正常方向</th>
+                                    <th className="p-4 border-b text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {coa.map(a => (
+                                    <tr key={a.id} className="border-b hover:bg-gray-50 group">
+                                        <td className="p-4 font-mono">{a.id}</td>
+                                        <td className="p-4 font-medium">{a.name}</td>
+                                        <td className="p-4">
+                                            <span className={`px-2 py-1 rounded text-xs ${
+                                                a.type === '資產' ? 'bg-blue-100 text-blue-700' :
+                                                a.type === '負債' ? 'bg-red-100 text-red-700' :
+                                                a.type === '權益' ? 'bg-purple-100 text-purple-700' :
+                                                a.type === '收入' ? 'bg-green-100 text-green-700' :
+                                                a.type === '成本' ? 'bg-orange-100 text-orange-700' :
+                                                a.type === '費用' ? 'bg-yellow-100 text-yellow-700' :
+                                                a.type === '營業外收入' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-700'
+                                            }`}>
+                                                {a.type}
+                                            </span>
+                                        </td>
+                                        <td className="p-4 text-gray-500">{a.side === 'debit' ? '借方 (Debit)' : '貸方 (Credit)'}</td>
+                                        <td className="p-4 text-right opacity-0 group-hover:opacity-100 transition">
+                                            <button onClick={() => startEdit(a)} className="text-blue-500 hover:underline mr-4">編輯</button>
+                                            <button onClick={() => onDeleteCoa(a.id)} className="text-red-500 hover:underline">刪除</button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        function AssetsView({ assets, setAssets, selectedYear, setSelectedYear, depreciationLog, setDepreciationLog }) {
+            const [isAdding, setIsAdding] = useState(false);
+            const [editingId, setEditingId] = useState(null);
+            const [editData, setEditData] = useState({ totalCost: 0, quantity: 1 });
+            const [remarkAssetId, setRemarkAssetId] = useState(null);
+            const [tempRemark, setTempRemark] = useState('');
+            const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1); // 1-12
+            const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+            const currentKey = `${selectedYear}-${selectedMonth}`;
+            const isRecorded = depreciationLog[currentKey] || false;
+
+            const toggleRecorded = () => {
+                setDepreciationLog(prev => ({
+                    ...prev,
+                    [currentKey]: !isRecorded
+                }));
+            };
+
+            const [formData, setFormData] = useState({
+                id: crypto.randomUUID(),
+                status: '使用中', // 使用中, 已售出, 閒置
+                category: '生財設備', // 生財設備, 裝修工程, 辦公設備, 運輸設備
+                name: '',
+                purchaseDate: `${selectedYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
+                totalCost: 0,
+                quantity: 1,
+                usefulLife: 5,
+                residualValue: 0,
+                remark: ''
+            });
+
+            // 當切換年度時，更新新增資產的預設日期
+            useEffect(() => {
+                const today = new Date();
+                const mm = String(today.getMonth() + 1).padStart(2, '0');
+                const dd = String(today.getDate()).padStart(2, '0');
+                setFormData(prev => ({ ...prev, purchaseDate: `${selectedYear}-${mm}-${dd}` }));
+            }, [selectedYear]);
+
+            const calculateAssetDetails = (asset, targetYear, targetMonth) => {
+                const purchaseDate = new Date(asset.purchaseDate);
+                const endDate = new Date(purchaseDate);
+                endDate.setFullYear(purchaseDate.getFullYear() + asset.usefulLife);
+                
+                const targetDate = new Date(targetYear, targetMonth, 0); // 指定年月底
+                
+                // 計算每月折舊 (總價 - 殘值) / (年 * 12)
+                const totalMonths = asset.usefulLife * 12;
+                const monthlyDepreciation = totalMonths > 0 ? (asset.totalCost - asset.residualValue) / totalMonths : 0;
+                const unitMonthlyDepreciation = asset.quantity > 0 ? monthlyDepreciation / asset.quantity : 0;
+
+                // 計算截至指定日期的已使用月數
+                let monthsUsed = (targetDate.getFullYear() - purchaseDate.getFullYear()) * 12 + (targetDate.getMonth() - purchaseDate.getMonth());
+                if (targetDate.getDate() < purchaseDate.getDate()) monthsUsed--;
+                monthsUsed = Math.max(0, monthsUsed);
+
+                let accumulatedDepreciation = Math.min(asset.totalCost - asset.residualValue, monthlyDepreciation * monthsUsed);
+                
+                const bookValue = asset.totalCost - accumulatedDepreciation;
+                
+                let depStatus = '折舊中';
+                if (asset.status === '已售出') depStatus = '停止折舊';
+                else if (bookValue <= asset.residualValue || monthsUsed >= totalMonths) depStatus = '折舊結束';
+                else if (targetDate < purchaseDate) depStatus = '尚未開始';
+
+                return {
+                    endDate: endDate.toISOString().split('T')[0],
+                    monthly: Math.round(monthlyDepreciation),
+                    unitMonthly: Math.round(unitMonthlyDepreciation),
+                    accumulated: Math.round(accumulatedDepreciation),
+                    bookValue: Math.round(bookValue),
+                    depStatus
+                };
+            };
+
+            const currentYear = selectedYear;
+            
+            // 計算各類別與總折舊額
+            const depreciationStats = useMemo(() => {
+                const stats = {
+                    '生財設備': 0,
+                    '裝修工程': 0,
+                    '辦公設備': 0,
+                    '運輸設備': 0,
+                    'total': 0
+                };
+
+                assets.forEach(asset => {
+                    if (asset.status === '已售出') return;
+                    
+                    const purchaseDate = new Date(asset.purchaseDate);
+                    const endDate = new Date(purchaseDate);
+                    endDate.setFullYear(purchaseDate.getFullYear() + asset.usefulLife);
+                    
+                    const monthFirstDay = new Date(selectedYear, selectedMonth - 1, 1);
+                    const monthLastDay = new Date(selectedYear, selectedMonth, 0);
+                    
+                    if (purchaseDate <= monthLastDay && endDate >= monthFirstDay) {
+                        const totalMonths = asset.usefulLife * 12;
+                        const monthlyDep = totalMonths > 0 ? (asset.totalCost - asset.residualValue) / totalMonths : 0;
+                        
+                        if (stats[asset.category] !== undefined) {
+                            stats[asset.category] += monthlyDep;
+                        }
+                        stats.total += monthlyDep;
+                    }
+                });
+                return stats;
+            }, [assets, selectedMonth, selectedYear]);
+
+            const monthlyTotalDepreciation = depreciationStats.total;
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                setAssets([...assets, { ...formData, id: crypto.randomUUID() }]);
+                setIsAdding(false);
+                setFormData({
+                    id: crypto.randomUUID(),
+                    status: '使用中',
+                    category: '生財設備',
+                    name: '',
+                    purchaseDate: `${selectedYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
+                    totalCost: 0,
+                    quantity: 1,
+                    usefulLife: 5,
+                    residualValue: 0,
+                    remark: ''
+                });
+            };
+
+            const deleteAsset = (id) => {
+                if (confirm('確定要刪除此資產紀錄嗎？')) {
+                    setAssets(assets.filter(a => a.id !== id));
+                }
+            };
+
+            const updateAssetStatus = (id, newStatus) => {
+                setAssets(assets.map(a => a.id === id ? { ...a, status: newStatus } : a));
+            };
+
+            const startEditing = (asset) => {
+                setEditingId(asset.id);
+                setEditData({ totalCost: asset.totalCost, quantity: asset.quantity });
+            };
+
+            const saveEdit = () => {
+                setAssets(assets.map(a => a.id === editingId ? { ...a, totalCost: editData.totalCost, quantity: editData.quantity } : a));
+                setEditingId(null);
+            };
+
+            const openRemark = (asset) => {
+                setRemarkAssetId(asset.id);
+                setTempRemark(asset.remark || '');
+            };
+
+            const saveRemark = () => {
+                setAssets(assets.map(a => a.id === remarkAssetId ? { ...a, remark: tempRemark } : a));
+                setRemarkAssetId(null);
+            };
+
+            const setPeriodToNow = () => {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = now.getMonth() + 1;
+                
+                // 限制在支援的年度範圍內 (2026-2031)
+                const targetYear = Math.max(2026, Math.min(2031, year));
+                setSelectedYear(targetYear);
+                setSelectedMonth(month);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                        <div className="flex flex-col gap-1">
+                            <h2 className="text-xl font-semibold text-gray-700">資產總表 (非流動資產折舊管理)</h2>
+                            <div className="flex items-center gap-3 bg-coffee-50 px-3 py-2 rounded-xl border border-coffee-100 shadow-sm">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-coffee-400">查詢期間:</span>
+                                    <div className="flex items-center gap-1">
+                                        <select 
+                                            value={selectedYear} 
+                                            onChange={(e) => setSelectedYear(Number(e.target.value))}
+                                            className="bg-white border border-coffee-200 rounded-lg px-2 py-1 text-sm font-bold text-coffee-700 outline-none focus:ring-2 focus:ring-coffee-300"
+                                        >
+                                            {[2026, 2027, 2028, 2029, 2030, 2031].map(y => (
+                                                <option key={y} value={y}>{y} 年</option>
+                                            ))}
+                                        </select>
+                                        <select 
+                                            value={selectedMonth} 
+                                            onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                                            className="bg-white border border-coffee-200 rounded-lg px-2 py-1 text-sm font-bold text-coffee-700 outline-none focus:ring-2 focus:ring-coffee-300"
+                                        >
+                                            {[...Array(12)].map((_, i) => (
+                                                <option key={i+1} value={i+1}>{i+1} 月</option>
+                                            ))}
+                                        </select>
+                                        <button 
+                                            onClick={setPeriodToNow}
+                                            className="ml-1 bg-coffee-100 text-coffee-600 hover:bg-coffee-200 px-2 py-1 rounded-lg text-xs font-bold transition border border-coffee-200"
+                                            title="跳轉至當前月份"
+                                        >
+                                            📅 本月
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="h-4 w-px bg-coffee-200 mx-1"></div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-coffee-400">該月折舊總額:</span>
+                                    <button 
+                                        onClick={() => setIsDetailModalOpen(true)}
+                                        className="text-lg font-mono font-bold text-coffee-700 hover:text-coffee-600 hover:underline decoration-coffee-300 decoration-2 underline-offset-4 transition-all"
+                                        title="點擊查看類別明細"
+                                    >
+                                        ${Math.round(monthlyTotalDepreciation).toLocaleString()}
+                                    </button>
+                                </div>
+                                <div className="h-4 w-px bg-coffee-200 mx-1"></div>
+                                <div className="flex items-center gap-2">
+                                    <button 
+                                        onClick={toggleRecorded}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm border ${
+                                            isRecorded 
+                                                ? 'bg-green-100 text-green-700 border-green-200' 
+                                                : 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100'
+                                        }`}
+                                    >
+                                        {isRecorded ? (
+                                            <><span>✅</span> 已提列至日記簿</>
+                                        ) : (
+                                            <><span>⭕</span> 尚未提列至日記簿</>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={() => setIsAdding(!isAdding)}
+                            className="bg-coffee-600 text-white px-4 py-2 rounded-lg shadow hover:bg-coffee-700 transition flex items-center gap-2"
+                        >
+                            {isAdding ? '取消' : '➕ 新增資產'}
+                        </button>
+                    </div>
+
+                    {isAdding && (
+                        <div className="card p-6 border-2 border-coffee-100 mb-6">
+                            <h3 className="text-lg font-medium mb-4 text-coffee-700">新增非流動資產 ({selectedYear}年)</h3>
+                            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">資產類別</label>
+                                    <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full border rounded p-2 text-sm">
+                                        <option value="生財設備">生財設備</option>
+                                        <option value="裝修工程">裝修工程</option>
+                                        <option value="辦公設備">辦公設備</option>
+                                        <option value="運輸設備">運輸設備</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">購買日期</label>
+                                    <input type="date" value={formData.purchaseDate} onChange={e => setFormData({...formData, purchaseDate: e.target.value})} className="w-full border rounded p-2 text-sm" required />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">資產名稱</label>
+                                    <input type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full border rounded p-2 text-sm" placeholder="例如: 烤箱" required />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">購入總價 (TWD)</label>
+                                    <input type="number" value={formData.totalCost === 0 ? 0 : (formData.totalCost || '')} onChange={e => setFormData({...formData, totalCost: Number(e.target.value)})} className="w-full border rounded p-2 text-sm text-right" required />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">購入數量</label>
+                                    <input type="number" value={formData.quantity === 0 ? 0 : (formData.quantity || '')} onChange={e => setFormData({...formData, quantity: Number(e.target.value)})} className="w-full border rounded p-2 text-sm text-right" required />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">折舊年限 (年)</label>
+                                    <input type="number" value={formData.usefulLife === 0 ? 0 : (formData.usefulLife || '')} onChange={e => setFormData({...formData, usefulLife: Number(e.target.value)})} className="w-full border rounded p-2 text-sm text-right" required />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">估計殘值</label>
+                                    <input type="number" value={formData.residualValue === 0 ? 0 : (formData.residualValue || '')} onChange={e => setFormData({...formData, residualValue: Number(e.target.value)})} className="w-full border rounded p-2 text-sm text-right" required />
+                                </div>
+                                <div className="md:col-span-1 flex justify-end">
+                                    <button type="submit" className="bg-coffee-600 text-white px-8 py-2 rounded-lg font-bold hover:bg-coffee-700 transition shadow-md w-full">確認新增資產</button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+
+                    <div className="card overflow-x-auto">
+                        <table className="w-full text-left border-collapse min-w-[1200px]">
+                            <thead className="bg-coffee-50 text-coffee-700 text-xs">
+                                <tr>
+                                    <th className="p-3 border-b">狀態</th>
+                                    <th className="p-3 border-b">類別</th>
+                                    <th className="p-3 border-b">購買日期</th>
+                                    <th className="p-3 border-b">名稱</th>
+                                    <th className="p-3 border-b text-right">購入總價</th>
+                                    <th className="p-3 border-b text-right">數量</th>
+                                    <th className="p-3 border-b text-right">折舊年限</th>
+                                    <th className="p-3 border-b">折舊結束日</th>
+                                    <th className="p-3 border-b text-right">估計殘值</th>
+                                    <th className="p-3 border-b text-right">月折舊金額</th>
+                                    <th className="p-3 border-b text-right">累積折舊</th>
+                                    <th className="p-3 border-b text-right">帳面價值</th>
+                                    <th className="p-3 border-b text-center">折舊狀態</th>
+                                    <th className="p-3 border-b text-center">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody className="text-sm">
+                                {assets.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="14" className="p-8 text-center text-gray-400 italic text-base">尚未登記任何非流動資產</td>
+                                    </tr>
+                                ) : (
+                                    assets.map(asset => {
+                                        const details = calculateAssetDetails(asset, selectedYear, selectedMonth);
+                                        return (
+                                             <tr key={asset.id} className="border-b hover:bg-gray-50 group">
+                                                 <td className="p-3">
+                                                     <select 
+                                                         value={asset.status} 
+                                                         onChange={(e) => updateAssetStatus(asset.id, e.target.value)}
+                                                         className={`px-2 py-1 rounded text-[10px] font-bold border-none outline-none focus:ring-2 focus:ring-coffee-200 cursor-pointer ${
+                                                             asset.status === '使用中' ? 'bg-green-100 text-green-700' :
+                                                             asset.status === '已售出' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'
+                                                         }`}
+                                                     >
+                                                         <option value="使用中">使用中</option>
+                                                         <option value="已售出">已售出</option>
+                                                         <option value="閒置">閒置</option>
+                                                     </select>
+                                                 </td>
+                                                 <td className="p-3 text-gray-600">{asset.category}</td>
+                                                <td className="p-3 font-mono text-[11px]">{asset.purchaseDate}</td>
+                                                 <td className="p-3 font-medium text-gray-800">{asset.name}</td>
+                                                 <td className="p-3 text-right font-mono">
+                                                     {editingId === asset.id ? (
+                                                         <input 
+                                                             type="number" 
+                                                             value={editData.totalCost} 
+                                                             onChange={e => setEditData({...editData, totalCost: Number(e.target.value)})}
+                                                             className="w-24 border rounded p-1 text-right text-sm"
+                                                         />
+                                                     ) : (
+                                                         asset.totalCost.toLocaleString()
+                                                     )}
+                                                 </td>
+                                                 <td className="p-3 text-right font-mono">
+                                                     {editingId === asset.id ? (
+                                                         <input 
+                                                             type="number" 
+                                                             value={editData.quantity} 
+                                                             onChange={e => setEditData({...editData, quantity: Number(e.target.value)})}
+                                                             className="w-16 border rounded p-1 text-right text-sm"
+                                                         />
+                                                     ) : (
+                                                         asset.quantity
+                                                     )}
+                                                 </td>
+                                                 <td className="p-3 text-right">{asset.usefulLife} 年</td>
+                                                <td className="p-3 font-mono text-[11px] text-gray-500">{details.endDate}</td>
+                                                <td className="p-3 text-right font-mono">{asset.residualValue.toLocaleString()}</td>
+                                                <td className="p-3 text-right font-mono">
+                                                    <div>{details.monthly.toLocaleString()}</div>
+                                                    {asset.quantity > 1 && (
+                                                        <div className="text-[10px] text-gray-400">({details.unitMonthly.toLocaleString()} / 件)</div>
+                                                    )}
+                                                </td>
+                                                <td className="p-3 text-right font-mono text-red-600">{details.accumulated.toLocaleString()}</td>
+                                                <td className="p-3 text-right font-mono font-bold text-coffee-700">{details.bookValue.toLocaleString()}</td>
+                                                <td className="p-3 text-center">
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                        details.depStatus === '折舊中' ? 'text-blue-600 border border-blue-200' :
+                                                        details.depStatus === '折舊結束' ? 'text-gray-500 bg-gray-100' :
+                                                        details.depStatus === '尚未開始' ? 'text-gray-400 border border-gray-200' : 'text-orange-600 border border-orange-200'
+                                                    }`}>{details.depStatus}</span>
+                                                </td>
+                                                <td className="p-3 text-center">
+                                                     <div className="flex items-center justify-center gap-2">
+                                                         {editingId === asset.id ? (
+                                                             <>
+                                                                 <button onClick={saveEdit} className="text-green-600 hover:text-green-800 font-bold text-xs">儲存</button>
+                                                                 <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600 text-xs">取消</button>
+                                                             </>
+                                                         ) : (
+                                                             <>
+                                                                 <button 
+                                                                     onClick={() => openRemark(asset)} 
+                                                                     className={`text-xs px-2 py-1 rounded transition ${asset.remark ? 'bg-amber-100 text-amber-700 font-bold' : 'text-coffee-400 hover:text-coffee-600'}`}
+                                                                 >
+                                                                     {asset.remark ? '👁️ 備註' : '💬 備註'}
+                                                                 </button>
+                                                                 <button onClick={() => startEditing(asset)} className="text-blue-500 hover:text-blue-700 opacity-0 group-hover:opacity-100 transition text-xs">編輯</button>
+                                                                 <button onClick={() => deleteAsset(asset.id)} className="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition text-xs">✕</button>
+                                                             </>
+                                                         )}
+                                                     </div>
+                                                 </td>
+                                            </tr>
+                                        );
+                                    })
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* 折舊明細彈窗 */}
+                    {isDetailModalOpen && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 animate-fade-in">
+                            <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden animate-fade-in-up">
+                                <div className="p-4 border-b flex justify-between items-center bg-coffee-50">
+                                    <h3 className="font-bold text-coffee-700 flex items-center gap-2">
+                                        <span>📊</span> {selectedYear}年{selectedMonth}月 折舊明細
+                                    </h3>
+                                    <button onClick={() => setIsDetailModalOpen(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    {[
+                                        { label: '生財設備', key: '生財設備', icon: '🍞' },
+                                        { label: '裝修工程', key: '裝修工程', icon: '🏗️' },
+                                        { label: '辦公設備', key: '辦公設備', icon: '💻' },
+                                        { label: '運輸設備', key: '運輸設備', icon: '🚚' }
+                                    ].map(item => (
+                                        <div key={item.key} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-xl">{item.icon}</span>
+                                                <span className="font-medium text-gray-700">{item.label}</span>
+                                            </div>
+                                            <span className="font-mono font-bold text-coffee-600">
+                                                ${Math.round(depreciationStats[item.key]).toLocaleString()}
+                                            </span>
+                                        </div>
+                                    ))}
+                                    <div className="pt-4 border-t-2 border-dashed border-gray-200 flex justify-between items-center">
+                                        <span className="font-bold text-gray-500">總計金額</span>
+                                        <span className="text-xl font-mono font-black text-coffee-700">
+                                            ${Math.round(monthlyTotalDepreciation).toLocaleString()}
+                                        </span>
+                                    </div>
+                                    <button 
+                                        onClick={() => setIsDetailModalOpen(false)}
+                                        className="w-full mt-4 py-3 bg-coffee-600 text-white rounded-xl font-bold hover:bg-coffee-700 shadow-md transition"
+                                    >
+                                        關閉明細
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 備註彈窗 */}
+                    {remarkAssetId && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 animate-fade-in">
+                            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-fade-in-up">
+                                <div className="p-4 border-b flex justify-between items-center bg-coffee-50">
+                                    <h3 className="font-bold text-coffee-700 flex items-center gap-2">
+                                        <span>📝</span> 資產備註 - {assets.find(a => a.id === remarkAssetId)?.name}
+                                    </h3>
+                                    <button onClick={() => setRemarkAssetId(null)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+                                </div>
+                                <div className="p-6">
+                                    <textarea 
+                                        className="w-full h-40 border-2 border-coffee-100 rounded-xl p-4 focus:ring-2 focus:ring-coffee-300 outline-none text-gray-700 resize-none"
+                                        placeholder="輸入資產相關備註事項..."
+                                        value={tempRemark}
+                                        onChange={(e) => setTempRemark(e.target.value)}
+                                        autoFocus
+                                    />
+                                    <div className="mt-6 flex gap-3">
+                                        <button 
+                                            onClick={() => setRemarkAssetId(null)}
+                                            className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition"
+                                        >
+                                            取消
+                                        </button>
+                                        <button 
+                                            onClick={saveRemark}
+                                            className="flex-1 py-3 bg-coffee-600 text-white rounded-xl font-bold hover:bg-coffee-700 shadow-lg transition"
+                                        >
+                                            儲存備註
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function ExportModal({ onClose, allEntries, coa, selectedYear }) {
+            const [contentType, setContentType] = useState('journal'); // journal, is, bs, raw
+            const [format, setFormat] = useState('pdf'); // pdf, excel, json
+            const currentYear = selectedYear;
+            const entries = allEntries[selectedYear] || [];
+
+            const handleExport = () => {
+                if (contentType === 'raw') {
+                    const blob = new Blob([JSON.stringify(allEntries, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `dessert_full_backup_${new Date().toISOString().split('T')[0]}.json`;
+                    a.click();
+                    onClose();
+                    return;
+                }
+
+                if (format === 'excel') {
+                    exportToExcel();
+                } else {
+                    exportToPdf();
+                }
+                onClose();
+            };
+
+            const exportToExcel = () => {
+                let data = [];
+                let filename = '';
+
+                if (contentType === 'journal') {
+                    filename = `${currentYear}年度_普通日記簿`;
+                    entries.forEach(entry => {
+                        entry.lines.forEach((line, idx) => {
+                            data.push({
+                                '傳票編號': idx === 0 ? entry.id : '',
+                                '日期': idx === 0 ? entry.date : '',
+                                '總摘要': idx === 0 ? entry.description : '',
+                                '會計科目': line.accountName,
+                                '摘要': line.lineDescription || '',
+                                '借方': line.type === 'debit' ? line.amount : 0,
+                                '貸方': line.type === 'credit' ? line.amount : 0
+                            });
+                        });
+                    });
+                } else if (contentType === 'is') {
+                    filename = `${currentYear}年度_損益表`;
+                    const balances = calculateBalances(entries, coa, new Date(currentYear, 0, 1), new Date(currentYear, 11, 31));
+                    const revenue = Object.values(balances).filter(a => a.type === '收入');
+                    const cost = Object.values(balances).filter(a => a.type === '成本');
+                    const expense = Object.values(balances).filter(a => a.type === '費用');
+                    const nonOpRev = Object.values(balances).filter(a => a.type === '營業外收入');
+                    const nonOpExp = Object.values(balances).filter(a => a.type === '營業外費損');
+
+                    const totalRev = revenue.reduce((s, a) => s + a.balance, 0);
+                    const totalCost = cost.reduce((s, a) => s + a.balance, 0);
+                    const totalExp = expense.reduce((s, a) => s + a.balance, 0);
+                    const totalNonOp = nonOpRev.reduce((s, a) => s + a.balance, 0) - nonOpExp.reduce((s, a) => s + a.balance, 0);
+
+                    data.push({ '項目': '營業收入', '金額': totalRev });
+                    revenue.forEach(a => data.push({ '項目': `  ${a.name}`, '金額': a.balance }));
+                    data.push({ '項目': '營業成本', '金額': totalCost });
+                    cost.forEach(a => data.push({ '項目': `  ${a.name}`, '金額': a.balance }));
+                    data.push({ '項目': '營業毛利', '金額': totalRev - totalCost });
+                    data.push({ '項目': '營業費用', '金額': totalExp });
+                    expense.forEach(a => data.push({ '項目': `  ${a.name}`, '金額': a.balance }));
+                    data.push({ '項目': '營業利益', '金額': totalRev - totalCost - totalExp });
+                    data.push({ '項目': '營業外收支', '金額': totalNonOp });
+                    data.push({ '項目': '本期淨利', '金額': totalRev - totalCost - totalExp + totalNonOp });
+                } else {
+                    filename = `${currentYear}年度_資產負債表`;
+                    const years = Object.keys(allEntries).map(Number).filter(y => y <= selectedYear).sort();
+                    const cumulativeEntries = years.flatMap(y => allEntries[y]);
+                    const balances = calculateBalances(cumulativeEntries, coa, null, new Date(currentYear, 11, 31), true);
+                    const assets = Object.values(balances).filter(a => a.type === '資產');
+                    const liabilities = Object.values(balances).filter(a => a.type === '負債');
+                    const equity = Object.values(balances).filter(a => a.type === '權益');
+                    const netIncome = Object.values(balances).filter(a => ['收入', '成本', '費用', '營業外收入', '營業外費損'].includes(a.type))
+                        .reduce((s, a) => a.side === 'credit' ? s + a.balance : s - a.balance, 0);
+
+                    data.push({ '類別': '資產', '科目': '', '金額': assets.reduce((s, a) => s + a.balance, 0) });
+                    assets.forEach(a => data.push({ '類別': '', '科目': a.name, '金額': a.balance }));
+                    data.push({ '類別': '負債', '科目': '', '金額': liabilities.reduce((s, a) => s + a.balance, 0) });
+                    liabilities.forEach(a => data.push({ '類別': '', '科目': a.name, '金額': a.balance }));
+                    data.push({ '類別': '權益', '科目': '', '金額': equity.reduce((s, a) => s + a.balance, 0) + netIncome });
+                    equity.forEach(a => data.push({ '類別': '', '科目': a.name, '金額': a.balance }));
+                    data.push({ '類別': '', '科目': '累積淨利', '金額': netIncome });
+                }
+
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "報表");
+                XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+            };
+
+            const exportToPdf = () => {
+                const element = document.createElement('div');
+                element.className = 'p-8 bg-white text-gray-800 font-sans';
+                
+                let title = contentType === 'journal' ? '普通日記簿' : (contentType === 'is' ? '損益表' : '資產負債表');
+                let html = `<h1 class="text-3xl font-bold mb-2 text-center text-gray-900">態度貳貳 - ${title}</h1>`;
+                html += `<p class="text-center text-sm text-gray-500 mb-6">年度：${currentYear} | 列印日期：${new Date().toLocaleDateString()}</p>`;
+
+                if (contentType === 'journal') {
+                    html += `
+                        <table class="w-full border-collapse border border-gray-300 text-xs">
+                            <thead>
+                                <tr class="bg-gray-100 text-gray-700">
+                                    <th class="border border-gray-300 p-2 w-24">日期/編號</th>
+                                    <th class="border border-gray-300 p-2 w-32">總摘要</th>
+                                    <th class="border border-gray-300 p-2">會計科目 / 摘要</th>
+                                    <th class="border border-gray-300 p-2 text-right w-20">借方</th>
+                                    <th class="border border-gray-300 p-2 text-right w-20">貸方</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${entries.map(e => `
+                                    <tr>
+                                        <td class="border border-gray-300 p-2 align-top">
+                                            <div class="font-bold">${e.date}</div>
+                                            <div class="text-[10px] text-coffee-600 font-mono">#${e.id}</div>
+                                        </td>
+                                        <td class="border border-gray-300 p-2 align-top text-gray-600">${e.description}</td>
+                                        <td class="border border-gray-300 p-0" colspan="3">
+                                            <table class="w-full border-none">
+                                                ${e.lines.map(l => `
+                                                    <tr>
+                                                        <td class="p-2 border-b border-gray-100 text-gray-800">
+                                                            <div class="font-medium ${l.type === 'credit' ? 'pl-4' : ''}">${l.accountName}</div>
+                                                            <div class="text-[10px] text-gray-400 italic">${l.lineDescription || ''}</div>
+                                                        </td>
+                                                        <td class="p-2 border-b border-gray-100 text-right w-20 font-mono">${l.type === 'debit' ? l.amount.toLocaleString() : ''}</td>
+                                                        <td class="p-2 border-b border-gray-100 text-right w-20 font-mono">${l.type === 'credit' ? l.amount.toLocaleString() : ''}</td>
+                                                    </tr>
+                                                `).join('')}
+                                            </table>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    `;
+                } else if (contentType === 'is') {
+                    const balances = calculateBalances(entries, coa, new Date(currentYear, 0, 1), new Date(currentYear, 11, 31));
+                    const revenue = Object.values(balances).filter(a => a.type === '收入');
+                    const cost = Object.values(balances).filter(a => a.type === '成本');
+                    const expense = Object.values(balances).filter(a => a.type === '費用');
+                    const nonOpRev = Object.values(balances).filter(a => a.type === '營業外收入');
+                    const nonOpExp = Object.values(balances).filter(a => a.type === '營業外費損');
+
+                    const totalRev = revenue.reduce((s, a) => s + a.balance, 0);
+                    const totalCost = cost.reduce((s, a) => s + a.balance, 0);
+                    const totalExp = expense.reduce((s, a) => s + a.balance, 0);
+                    const totalNonOp = nonOpRev.reduce((s, a) => s + a.balance, 0) - nonOpExp.reduce((s, a) => s + a.balance, 0);
+
+                    const row = (label, value, isBold = false, indent = false) => `
+                        <tr class="${isBold ? 'font-bold bg-gray-50' : ''}">
+                            <td class="border border-gray-300 p-2 ${indent ? 'pl-8' : ''}">${label}</td>
+                            <td class="border border-gray-300 p-2 text-right font-mono">${value.toLocaleString()}</td>
+                        </tr>
+                    `;
+
+                    html += `
+                        <table class="w-full max-w-2xl mx-auto border-collapse border border-gray-300 text-sm">
+                            <thead>
+                                <tr class="bg-gray-100 text-gray-700">
+                                    <th class="border border-gray-300 p-2 text-left">項目</th>
+                                    <th class="border border-gray-300 p-2 text-right">金額 (TWD)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${row('營業收入', totalRev, true)}
+                                ${revenue.map(a => row(a.name, a.balance, false, true)).join('')}
+                                ${row('營業成本', totalCost, true)}
+                                ${cost.map(a => row(a.name, a.balance, false, true)).join('')}
+                                ${row('營業毛利', totalRev - totalCost, true)}
+                                ${row('營業費用', totalExp, true)}
+                                ${expense.map(a => row(a.name, a.balance, false, true)).join('')}
+                                ${row('營業利益', totalRev - totalCost - totalExp, true)}
+                                ${row('營業外收支淨額', totalNonOp, true)}
+                                ${row('本期淨利', totalRev - totalCost - totalExp + totalNonOp, true)}
+                            </tbody>
+                        </table>
+                    `;
+                } else {
+                    const years = Object.keys(allEntries).map(Number).filter(y => y <= selectedYear).sort();
+                    const cumulativeEntries = years.flatMap(y => allEntries[y]);
+                    const balances = calculateBalances(cumulativeEntries, coa, null, new Date(currentYear, 11, 31), true);
+                    const assets = Object.values(balances).filter(a => a.type === '資產');
+                    const liabilities = Object.values(balances).filter(a => a.type === '負債');
+                    const equity = Object.values(balances).filter(a => a.type === '權益');
+                    const netIncome = Object.values(balances).filter(a => ['收入', '成本', '費用', '營業外收入', '營業外費損'].includes(a.type))
+                        .reduce((s, a) => a.side === 'credit' ? s + a.balance : s - a.balance, 0);
+
+                    const section = (title, items, total) => `
+                        <tr class="bg-blue-50 font-bold"><td class="border border-gray-300 p-2" colspan="2">${title}</td></tr>
+                        ${items.map(a => `<tr><td class="border border-gray-300 p-2 pl-8">${a.name}</td><td class="border border-gray-300 p-2 text-right font-mono">${a.balance.toLocaleString()}</td></tr>`).join('')}
+                        ${title === '權益' ? `<tr><td class="border border-gray-300 p-2 pl-8">本期淨利 (累積)</td><td class="border border-gray-300 p-2 text-right font-mono">${netIncome.toLocaleString()}</td></tr>` : ''}
+                        <tr class="font-bold"><td class="border border-gray-300 p-2 text-right">${title}總計</td><td class="border border-gray-300 p-2 text-right font-mono">${total.toLocaleString()}</td></tr>
+                    `;
+
+                    html += `
+                        <table class="w-full max-w-2xl mx-auto border-collapse border border-gray-300 text-sm">
+                            <thead>
+                                <tr class="bg-gray-100 text-gray-700">
+                                    <th class="border border-gray-300 p-2 text-left">會計科目</th>
+                                    <th class="border border-gray-300 p-2 text-right">金額 (TWD)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${section('資產', assets, assets.reduce((s, a) => s + a.balance, 0))}
+                                ${section('負債', liabilities, liabilities.reduce((s, a) => s + a.balance, 0))}
+                                ${section('權益', equity, equity.reduce((s, a) => s + a.balance, 0) + netIncome)}
+                            </tbody>
+                        </table>
+                    `;
+                }
+
+                element.innerHTML = html;
+                document.body.appendChild(element);
+
+                const opt = {
+                    margin: 0.5,
+                    filename: `${title}_${currentYear}.pdf`,
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { scale: 2, useCORS: true },
+                    jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
+                };
+
+                html2pdf().set(opt).from(element).save().then(() => {
+                    document.body.removeChild(element);
+                });
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-fade-in-up">
+                        <div className="p-6 border-b border-coffee-50 flex justify-between items-center bg-coffee-50">
+                            <h3 className="text-xl font-bold text-coffee-600">匯出中心</h3>
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition text-2xl">✕</button>
+                        </div>
+                        
+                        <div className="p-6 space-y-6">
+                            <section>
+                                <label className="block text-sm font-bold text-gray-500 mb-3 uppercase tracking-widest">1. 選擇匯出內容</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {[
+                                        { id: 'journal', label: '普通日記簿', icon: '📝' },
+                                        { id: 'is', label: '損益表', icon: '📈' },
+                                        { id: 'bs', label: '資產負債表', icon: '⚖️' },
+                                        { id: 'raw', label: '原始資料(備份)', icon: '💾' }
+                                    ].map(item => (
+                                        <button 
+                                            key={item.id}
+                                            onClick={() => setContentType(item.id)}
+                                            className={`p-3 rounded-xl border-2 transition text-left flex flex-col gap-1 ${contentType === item.id ? 'border-coffee-600 bg-coffee-50' : 'border-gray-100 hover:border-coffee-200'}`}
+                                        >
+                                            <span className="text-xl">{item.icon}</span>
+                                            <span className={`text-sm font-medium ${contentType === item.id ? 'text-coffee-700' : 'text-gray-600'}`}>{item.label}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </section>
+
+                            <section>
+                                <label className="block text-sm font-bold text-gray-500 mb-3 uppercase tracking-widest">2. 選擇檔案格式</label>
+                                <div className="flex gap-4">
+                                    {contentType === 'raw' ? (
+                                        <div className="flex-1 p-3 rounded-xl border-2 border-coffee-600 bg-coffee-50 flex items-center gap-3">
+                                            <span className="text-xl">📄</span>
+                                            <span className="text-sm font-medium text-coffee-700">JSON 格式</span>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <button 
+                                                onClick={() => setFormat('pdf')}
+                                                className={`flex-1 p-3 rounded-xl border-2 transition flex items-center gap-3 ${format === 'pdf' ? 'border-coffee-600 bg-coffee-50' : 'border-gray-100 hover:border-coffee-200'}`}
+                                            >
+                                                <span className="text-xl">📕</span>
+                                                <span className={`text-sm font-medium ${format === 'pdf' ? 'text-coffee-700' : 'text-gray-600'}`}>PDF 報表</span>
+                                            </button>
+                                            <button 
+                                                onClick={() => setFormat('excel')}
+                                                className={`flex-1 p-3 rounded-xl border-2 transition flex items-center gap-3 ${format === 'excel' ? 'border-coffee-600 bg-coffee-50' : 'border-gray-100 hover:border-coffee-200'}`}
+                                            >
+                                                <span className="text-xl">📊</span>
+                                                <span className={`text-sm font-medium ${format === 'excel' ? 'text-coffee-700' : 'text-gray-600'}`}>Excel 試算表</span>
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </section>
+
+                            <button 
+                                onClick={handleExport}
+                                className="w-full py-4 bg-coffee-600 text-white rounded-xl font-bold text-lg shadow-lg hover:bg-coffee-700 transition-all active:scale-[0.98] mt-4"
+                            >
+                                開始匯出 🚀
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
