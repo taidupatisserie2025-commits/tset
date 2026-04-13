@@ -389,6 +389,12 @@
                                     >
                                         會計科目
                                     </button>
+                                    <button 
+                                        onClick={() => setView('ledger')}
+                                        className={`px-4 py-2 rounded-lg transition text-sm font-medium whitespace-nowrap ${view === 'ledger' ? 'bg-coffee-600 text-white shadow-md' : 'text-coffee-400 hover:bg-coffee-50'}`}
+                                    >
+                                        分類帳
+                                    </button>
                                 </nav>
                                 <div className="flex items-center gap-3">
                                     <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-coffee-100 shadow-sm">
@@ -457,8 +463,9 @@
                     <main className="max-w-5xl mx-auto">
                         {mainTab === 'accounting' ? (
                             <>
-                                {view === 'journal' && <JournalView entries={entries} coa={coa} onAddEntry={addEntry} selectedYear={selectedYear} />}
+                                {view === 'journal' && <JournalView entries={entries} coa={coa} onAddEntry={addEntry} selectedYear={selectedYear} onAddAsset={(a) => setAssetsData(prev => [...prev, a])} />}
                                 {view === 'reports' && <ReportsView allEntries={allEntries} coa={coa} selectedYear={selectedYear} />}
+                                {view === 'ledger' && <LedgerView allEntries={allEntries} coa={coa} />}
                                 {view === 'coa' && <CoaView coa={coa} onAddCoa={addCoa} onUpdateCoa={updateCoa} onDeleteCoa={deleteCoa} />}
                             </>
                         ) : (
@@ -695,8 +702,67 @@
 
         // --- 子組件 ---
 
-        function JournalView({ entries, coa, onAddEntry, selectedYear }) {
+        function JournalView({ entries, coa, onAddEntry, selectedYear, onAddAsset }) {
             const [showForm, setShowForm] = useState(false);
+            const [pendingAssets, setPendingAssets] = useState([]);
+            const [currentPendingAsset, setCurrentPendingAsset] = useState(null);
+
+            const handleSaveEntry = (entry) => {
+                onAddEntry(entry);
+                setShowForm(false);
+                
+                const equipmentKeywords = [
+                    { key: '生財設備', cat: '生財設備' },
+                    { key: '租賃物改良', cat: '裝修工程' },
+                    { key: '裝修工程', cat: '裝修工程' },
+                    { key: '運輸設備', cat: '運輸設備' },
+                    { key: '辦公設備', cat: '辦公設備' }
+                ];
+                
+                const matchedAssets = [];
+                
+                entry.lines.forEach(line => {
+                    if (line.type === 'debit') {
+                        for (let eq of equipmentKeywords) {
+                            if (line.accountName.includes(eq.key)) {
+                                matchedAssets.push({
+                                    id: crypto.randomUUID(),
+                                    status: '使用中',
+                                    category: eq.cat,
+                                    name: line.lineDescription || entry.description || eq.cat,
+                                    purchaseDate: entry.date,
+                                    totalCost: line.amount,
+                                    quantity: 1,
+                                    usefulLife: 5,
+                                    residualValue: 0,
+                                    remark: `憑證: ${entry.id}`
+                                });
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                if (matchedAssets.length > 0) {
+                    setPendingAssets(matchedAssets);
+                    setCurrentPendingAsset(matchedAssets[0]);
+                }
+            };
+
+            const handleSaveAsset = () => {
+                if (onAddAsset && currentPendingAsset) onAddAsset(currentPendingAsset);
+                handleSkipAsset();
+            };
+
+            const handleSkipAsset = () => {
+                const nextQueue = pendingAssets.slice(1);
+                setPendingAssets(nextQueue);
+                if (nextQueue.length > 0) {
+                    setCurrentPendingAsset(nextQueue[0]);
+                } else {
+                    setCurrentPendingAsset(null);
+                }
+            };
 
             return (
                 <div className="space-y-6">
@@ -713,7 +779,7 @@
                     {showForm && (
                         <div className="card p-6 border-2 border-coffee-100">
                             <h3 className="text-lg font-medium mb-4 text-coffee-700">記下一筆交易 ({selectedYear}年)</h3>
-                            <EntryForm coa={coa} entries={entries} selectedYear={selectedYear} onSave={(e) => { onAddEntry(e); setShowForm(false); }} />
+                            <EntryForm coa={coa} entries={entries} selectedYear={selectedYear} onSave={handleSaveEntry} />
                         </div>
                     )}
 
@@ -770,6 +836,70 @@
                             </tbody>
                         </table>
                     </div>
+
+                    {currentPendingAsset && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 animate-fade-in">
+                            <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden animate-fade-in-up">
+                                <div className="p-4 border-b flex justify-between items-center bg-coffee-50">
+                                    <h3 className="font-bold text-coffee-700 flex items-center gap-2">
+                                        <span>✨</span> 新增至資產總表?
+                                    </h3>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <p className="text-sm text-gray-600 font-medium">偵測到借方有「{currentPendingAsset.category}」相關的支出，要順便加入資產總表以便日後自動計算折舊嗎？</p>
+                                    
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">資產名稱 (來自摘要)</label>
+                                        <input 
+                                            type="text" 
+                                            value={currentPendingAsset.name} 
+                                            onChange={e => setCurrentPendingAsset({...currentPendingAsset, name: e.target.value})}
+                                            className="w-full border p-2 rounded focus:ring-2 focus:ring-coffee-300 outline-none font-bold text-coffee-700"
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 mb-1">折舊年限 (年)</label>
+                                            <input 
+                                                type="number" 
+                                                value={currentPendingAsset.usefulLife} 
+                                                onChange={e => setCurrentPendingAsset({...currentPendingAsset, usefulLife: Number(e.target.value)})}
+                                                className="w-full border p-2 rounded focus:ring-2 focus:ring-coffee-300 outline-none text-right font-mono"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 mb-1">預估殘值</label>
+                                            <input 
+                                                type="number" 
+                                                value={currentPendingAsset.residualValue} 
+                                                onChange={e => setCurrentPendingAsset({...currentPendingAsset, residualValue: Number(e.target.value)})}
+                                                className="w-full border p-2 rounded focus:ring-2 focus:ring-coffee-300 outline-none text-right font-mono"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4 text-sm bg-gray-50 p-3 rounded-lg border border-gray-100">
+                                        <div className="text-gray-500 font-bold">金額: <span className="text-gray-800 font-mono font-normal">{(currentPendingAsset.totalCost).toLocaleString()}</span></div>
+                                        <div className="text-gray-500 font-bold">日期: <span className="text-gray-800 font-mono font-normal">{currentPendingAsset.purchaseDate}</span></div>
+                                    </div>
+
+                                    <div className="mt-8 flex gap-3">
+                                        <button 
+                                            onClick={handleSkipAsset}
+                                            className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition"
+                                        >
+                                            不加入
+                                        </button>
+                                        <button 
+                                            onClick={handleSaveAsset}
+                                            className="flex-1 py-3 bg-coffee-600 text-white rounded-xl font-bold hover:bg-coffee-700 shadow-lg transition"
+                                        >
+                                            ✔️ 加入資產
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         }
@@ -965,11 +1095,129 @@
             );
         }
 
+        function LedgerView({ allEntries, coa }) {
+            const [selectedAccountId, setSelectedAccountId] = useState('');
+            
+            const years = Object.keys(allEntries).map(Number).sort();
+            const cumulativeEntries = years.flatMap(y => allEntries[y]);
+            
+            const accountInfo = coa.find(a => a.id === selectedAccountId);
+            
+            const relevantLines = useMemo(() => {
+                const lines = [];
+                let runningBalance = 0;
+                if (!accountInfo) return lines;
+
+                const sortedEntries = [...cumulativeEntries].sort((a, b) => {
+                    if (a.date !== b.date) return a.date.localeCompare(b.date);
+                    return a.id.localeCompare(b.id);
+                });
+
+                sortedEntries.forEach(entry => {
+                    entry.lines.forEach(line => {
+                        if (line.accountId === selectedAccountId) {
+                            const isDebit = line.type === 'debit';
+                            const amount = Number(line.amount) || 0;
+                            
+                            if (accountInfo.side === 'debit') {
+                                runningBalance += isDebit ? amount : -amount;
+                            } else {
+                                runningBalance += isDebit ? -amount : amount;
+                            }
+
+                            lines.push({
+                                date: entry.date,
+                                voucherId: entry.id,
+                                description: entry.description,
+                                lineDescription: line.lineDescription,
+                                debit: isDebit ? amount : 0,
+                                credit: !isDebit ? amount : 0,
+                                balance: runningBalance
+                            });
+                        }
+                    });
+                });
+                return lines;
+            }, [selectedAccountId, accountInfo, cumulativeEntries]);
+
+            return (
+                <div className="card p-6 border border-coffee-100 animate-fade-in mb-8">
+                    <div className="flex justify-between items-start mb-4 border-b pb-2">
+                        <h3 className="text-xl font-bold text-coffee-700">分類帳 (Ledger)</h3>
+                    </div>
+                    
+                    <div className="mb-6">
+                        <label className="block text-sm font-medium text-gray-600 mb-2">選擇會計科目</label>
+                        <select 
+                            value={selectedAccountId} 
+                            onChange={e => setSelectedAccountId(e.target.value)}
+                            className="w-full md:w-1/2 border rounded-xl p-3 focus:ring-2 focus:ring-coffee-300 outline-none shadow-sm bg-gray-50"
+                        >
+                            <option value="">請選擇科目...</option>
+                            {coa.map(a => <option key={a.id} value={a.id}>{a.id} {a.name}</option>)}
+                        </select>
+                    </div>
+
+                    {selectedAccountId && accountInfo ? (
+                        <div className="overflow-x-auto rounded-xl border border-gray-200">
+                            <div className="p-4 bg-gray-50 border-b border-gray-200 text-sm text-gray-700 flex flex-wrap gap-4 justify-between items-center font-medium">
+                                <div>
+                                    <span>選定科目: <span className="font-bold text-coffee-700 text-base">{accountInfo.id} {accountInfo.name}</span></span>
+                                    <span className="text-xs px-2 py-1 bg-white rounded border border-gray-200 text-gray-500 inline-block ml-3">{accountInfo.type}</span>
+                                </div>
+                                <span className="bg-white px-3 py-1 rounded-md border border-gray-200">正常餘額: <span className="text-coffee-600">{accountInfo.side === 'debit' ? '借方 (Debit)' : '貸方 (Credit)'}</span></span>
+                            </div>
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead className="bg-gray-100 text-gray-600">
+                                    <tr>
+                                        <th className="p-3 border-b border-gray-200 font-semibold whitespace-nowrap">日期</th>
+                                        <th className="p-3 border-b border-gray-200 font-semibold whitespace-nowrap">傳票編號</th>
+                                        <th className="p-3 border-b border-gray-200 font-semibold min-w-[120px]">總摘要</th>
+                                        <th className="p-3 border-b border-gray-200 font-semibold min-w-[120px]">明細摘要</th>
+                                        <th className="p-3 border-b border-gray-200 font-semibold text-right whitespace-nowrap">借方金額</th>
+                                        <th className="p-3 border-b border-gray-200 font-semibold text-right whitespace-nowrap">貸方金額</th>
+                                        <th className="p-3 border-b border-gray-200 font-semibold text-right whitespace-nowrap">餘額</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {relevantLines.length > 0 ? (
+                                        relevantLines.map((line, idx) => (
+                                            <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50 transition">
+                                                <td className="p-3 text-gray-600 whitespace-nowrap">{line.date}</td>
+                                                <td className="p-3 font-mono text-xs text-coffee-600 whitespace-nowrap">{line.voucherId}</td>
+                                                <td className="p-3">{line.description}</td>
+                                                <td className="p-3 text-gray-500 italic">{line.lineDescription}</td>
+                                                <td className="p-3 text-right font-mono text-gray-700">{line.debit ? line.debit.toLocaleString() : ''}</td>
+                                                <td className="p-3 text-right font-mono text-gray-700">{line.credit ? line.credit.toLocaleString() : ''}</td>
+                                                <td className="p-3 text-right font-mono font-bold text-coffee-700">{line.balance.toLocaleString()}</td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan="7" className="p-8 text-center text-gray-400">目前沒有此科目的交易紀錄</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
+                        <div className="p-8 text-center text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                            請先從上方選擇一個會計科目，以查看其明細分類帳
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
         function ReportsView({ allEntries, coa, selectedYear }) {
+            const [activeReport, setActiveReport] = useState('is');
+            const [hideZeroBalances, setHideZeroBalances] = useState(false);
             const [isFilter, setIsFilter] = useState({ type: 'month', value: String(new Date().getMonth() + 1) });
             const [isCustomDates, setIsCustomDates] = useState({ start: '', end: '' });
             const [bsFilter, setBsFilter] = useState({ type: 'all', value: '' });
             const [bsCustomDates, setBsCustomDates] = useState({ start: '', end: '' });
+            const [cfFilter, setCfFilter] = useState({ type: 'full-year', value: '' });
+            const [cfCustomDates, setCfCustomDates] = useState({ start: '', end: '' });
 
             const currentYear = selectedYear;
 
@@ -989,11 +1237,11 @@
             }, [allEntries, coa, bsFilter, bsCustomDates, currentYear, selectedYear]);
 
             // 損益表各項數值
-            const revenue = Object.values(isLedger).filter(a => a.type === '收入');
-            const cost = Object.values(isLedger).filter(a => a.type === '成本');
-            const expense = Object.values(isLedger).filter(a => a.type === '費用');
-            const nonOpRevenue = Object.values(isLedger).filter(a => a.type === '營業外收入');
-            const nonOpExpense = Object.values(isLedger).filter(a => a.type === '營業外費損');
+            let revenue = Object.values(isLedger).filter(a => a.type === '收入');
+            let cost = Object.values(isLedger).filter(a => a.type === '成本');
+            let expense = Object.values(isLedger).filter(a => a.type === '費用');
+            let nonOpRevenue = Object.values(isLedger).filter(a => a.type === '營業外收入');
+            let nonOpExpense = Object.values(isLedger).filter(a => a.type === '營業外費損');
 
             const grossProfit = revenue.reduce((sum, a) => sum + a.balance, 0) - cost.reduce((sum, a) => sum + a.balance, 0);
             const opIncome = grossProfit - expense.reduce((sum, a) => sum + a.balance, 0);
@@ -1001,8 +1249,11 @@
 
             // 資產負債表各項數值 (BS 淨利應包含歷史累積至今的所有損益科目餘額)
             const assets = Object.values(bsLedger).filter(a => a.type === '資產');
-            const liabilities = Object.values(bsLedger).filter(a => a.type === '負債');
-            const equity = Object.values(bsLedger).filter(a => a.type === '權益');
+            let currentAssets = assets.filter(a => a.id.startsWith('11') || a.id.startsWith('12') || a.id.startsWith('13'));
+            let nonCurrentAssets = assets.filter(a => a.id.startsWith('14') || a.id.startsWith('15'));
+            let otherAssets = assets.filter(a => !a.id.startsWith('11') && !a.id.startsWith('12') && !a.id.startsWith('13') && !a.id.startsWith('14') && !a.id.startsWith('15'));
+            let liabilities = Object.values(bsLedger).filter(a => a.type === '負債');
+            let equity = Object.values(bsLedger).filter(a => a.type === '權益');
             const bsNetIncome = Object.values(bsLedger).filter(a => ['收入', '成本', '費用', '營業外收入', '營業外費損'].includes(a.type))
                 .reduce((sum, a) => {
                     if (a.side === 'credit') return sum + a.balance;
@@ -1012,6 +1263,72 @@
             const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
             const totalLiabilities = liabilities.reduce((sum, a) => sum + a.balance, 0);
             const totalEquity = equity.reduce((sum, a) => sum + a.balance, 0);
+
+            if (hideZeroBalances) {
+                const f = arr => arr.filter(a => a.balance !== 0);
+                revenue = f(revenue);
+                cost = f(cost);
+                expense = f(expense);
+                nonOpRevenue = f(nonOpRevenue);
+                nonOpExpense = f(nonOpExpense);
+                currentAssets = f(currentAssets);
+                nonCurrentAssets = f(nonCurrentAssets);
+                otherAssets = f(otherAssets);
+                liabilities = f(liabilities);
+                equity = f(equity);
+            }
+
+            const cfData = useMemo(() => {
+                const { start, end } = getFilterRange(cfFilter, cfCustomDates, currentYear);
+                const periodStart = start || new Date(currentYear, 0, 1);
+                const periodEnd = end || new Date(currentYear, 11, 31);
+                
+                const startBalDate = new Date(periodStart);
+                startBalDate.setDate(startBalDate.getDate() - 1);
+                
+                const years = Object.keys(allEntries).map(Number).filter(y => y <= selectedYear).sort();
+                const cumulativeEntries = years.flatMap(y => allEntries[y]);
+                
+                const bsStart = calculateBalances(cumulativeEntries, coa, null, startBalDate, true);
+                const bsEnd = calculateBalances(cumulativeEntries, coa, null, periodEnd, true);
+                
+                const isLedgerForCf = calculateBalances(cumulativeEntries, coa, periodStart, periodEnd);
+                const rev = Object.values(isLedgerForCf).filter(a => a.type === '收入').reduce((sum, a) => sum + a.balance, 0);
+                const cost = Object.values(isLedgerForCf).filter(a => a.type === '成本').reduce((sum, a) => sum + a.balance, 0);
+                const exp = Object.values(isLedgerForCf).filter(a => a.type === '費用').reduce((sum, a) => sum + a.balance, 0);
+                const nonRev = Object.values(isLedgerForCf).filter(a => a.type === '營業外收入').reduce((sum, a) => sum + a.balance, 0);
+                const nonExp = Object.values(isLedgerForCf).filter(a => a.type === '營業外費損').reduce((sum, a) => sum + a.balance, 0);
+                const periodNetIncome = (rev + nonRev) - (cost + exp + nonExp);
+                
+                const getChange = (a) => {
+                    const s = bsStart[a.id] ? bsStart[a.id].balance : 0;
+                    const e = bsEnd[a.id] ? bsEnd[a.id].balance : 0;
+                    return e - s;
+                };
+                
+                const f = hideZeroBalances ? (arr => arr.filter(a => a.change !== 0)) : (arr => arr);
+                
+                const cashAccounts = coa.filter(a => a.id.startsWith('11') && a.type === '資產');
+                const begCash = cashAccounts.reduce((sum, a) => sum + (bsStart[a.id]?.balance || 0), 0);
+                const endCash = cashAccounts.reduce((sum, a) => sum + (bsEnd[a.id]?.balance || 0), 0);
+                
+                const caChanges = f(coa.filter(a => a.type === '資產' && !a.id.startsWith('11') && (a.id.startsWith('12') || a.id.startsWith('13'))).map(a => ({ id: a.id, name: a.name, change: -getChange(a) })));
+                const clChanges = f(coa.filter(a => a.type === '負債' && a.id.startsWith('21')).map(a => ({ id: a.id, name: a.name, change: getChange(a) })));
+                const totalOpCash = periodNetIncome + caChanges.reduce((s, a) => s + a.change, 0) + clChanges.reduce((s, a) => s + a.change, 0);
+                
+                const invChanges = f(coa.filter(a => a.type === '資產' && (a.id.startsWith('14') || a.id.startsWith('15'))).map(a => ({ id: a.id, name: a.name, change: -getChange(a) })));
+                const totalInvCash = invChanges.reduce((s, a) => s + a.change, 0);
+                
+                const longLiabChanges = coa.filter(a => a.type === '負債' && !a.id.startsWith('21')).map(a => ({ id: a.id, name: a.name, change: getChange(a) }));
+                const eqChanges = coa.filter(a => a.type === '權益').map(a => ({ id: a.id, name: a.name, change: getChange(a) }));
+                const finChanges = f([...longLiabChanges, ...eqChanges]);
+                const totalFinCash = finChanges.reduce((s, a) => s + a.change, 0);
+                
+                const netCashChange = totalOpCash + totalInvCash + totalFinCash;
+                
+                return { begCash, endCash, netCashChange, periodNetIncome, caChanges, clChanges, invChanges, finChanges, totalOpCash, totalInvCash, totalFinCash };
+            }, [allEntries, coa, cfFilter, cfCustomDates, currentYear, selectedYear, hideZeroBalances]);
+
 
             const PeriodSelector = ({ filter, setFilter, customDates, setCustomDates, label, mode = 'range' }) => (
                 <div className="mb-4 space-y-2">
@@ -1057,12 +1374,46 @@
             );
 
             return (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* 損益表卡片 */}
-                    <div className="card p-6 border border-coffee-100">
-                        <div className="flex justify-between items-start mb-4 border-b pb-2">
-                            <h3 className="text-xl font-bold text-coffee-700">損益表 (Income Statement)</h3>
+                <div>
+                    <div className="flex gap-2 md:gap-4 mb-6 border-b border-gray-200">
+                        <button 
+                            onClick={() => setActiveReport('is')}
+                            className={`px-4 py-3 font-bold text-base transition-all flex items-center gap-2 hover:bg-gray-50 rounded-t-lg ${activeReport === 'is' ? 'text-coffee-600 border-b-2 border-coffee-600 bg-coffee-50/50' : 'text-gray-400 hover:text-gray-600'}`}
+                        >
+                            📈 損益表
+                        </button>
+                        <button 
+                            onClick={() => setActiveReport('bs')}
+                            className={`px-4 py-3 font-bold text-base transition-all flex items-center gap-2 hover:bg-gray-50 rounded-t-lg ${activeReport === 'bs' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-400 hover:text-gray-600'}`}
+                        >
+                            ⚖️ 資產負債表
+                        </button>
+                        <button 
+                            onClick={() => setActiveReport('cf')}
+                            className={`px-4 py-3 font-bold text-base transition-all flex items-center gap-2 hover:bg-gray-50 rounded-t-lg ${activeReport === 'cf' ? 'text-green-600 border-b-2 border-green-600 bg-green-50/50' : 'text-gray-400 hover:text-gray-600'}`}
+                        >
+                            💵 現金流量表
+                        </button>
+                        <div className="ml-auto flex items-center pr-2">
+                            <label className="text-sm font-bold text-gray-500 cursor-pointer flex items-center gap-2 hover:text-gray-700 transition">
+                                <input 
+                                    type="checkbox" 
+                                    checked={hideZeroBalances} 
+                                    onChange={e => setHideZeroBalances(e.target.checked)}
+                                    className="w-4 h-4 text-coffee-600 rounded-sm border-gray-300 focus:ring-coffee-500"
+                                />
+                                隱藏餘額為 0 的科目
+                            </label>
                         </div>
+                    </div>
+
+                    <div className="animate-fade-in max-w-4xl mx-auto">
+                        {/* 損益表卡片 */}
+                        {activeReport === 'is' && (
+                            <div className="card p-6 border border-coffee-100 shadow-sm">
+                                <div className="flex justify-between items-start mb-4 border-b pb-2">
+                                    <h3 className="text-xl font-bold text-coffee-700">損益表 (Income Statement)</h3>
+                                </div>
                         
                         <PeriodSelector 
                             label="損益計算期間"
@@ -1124,13 +1475,15 @@
                                 <span>{isNetIncome.toLocaleString()}</span>
                             </div>
                         </div>
-                    </div>
+                            </div>
+                        )}
 
-                    {/* 資產負債表卡片 */}
-                    <div className="card p-6 border border-blue-100">
-                        <div className="flex justify-between items-start mb-4 border-b pb-2">
-                            <h3 className="text-xl font-bold text-blue-700">資產負債表 (Balance Sheet)</h3>
-                        </div>
+                        {/* 資產負債表卡片 */}
+                        {activeReport === 'bs' && (
+                            <div className="card p-6 border border-blue-100 shadow-sm">
+                                <div className="flex justify-between items-start mb-4 border-b pb-2">
+                                    <h3 className="text-xl font-bold text-blue-700">資產負債表 (Balance Sheet)</h3>
+                                </div>
 
                         <PeriodSelector 
                             label="結算截止日期"
@@ -1143,12 +1496,31 @@
 
                         <div className="space-y-2">
                             <div className="font-bold text-gray-700">資產</div>
-                            {assets.map(a => (
-                                <div key={a.id} className="flex justify-between pl-4 text-sm">
+                            
+                            {currentAssets.length > 0 && <div className="text-gray-600 font-semibold pl-3 text-sm mt-1 border-b border-gray-100 pb-1">流動資產</div>}
+                            {currentAssets.map(a => (
+                                <div key={a.id} className="flex justify-between pl-6 text-sm mt-1">
                                     <span>{a.name}</span>
                                     <span>{a.balance.toLocaleString()}</span>
                                 </div>
                             ))}
+
+                            {nonCurrentAssets.length > 0 && <div className="text-gray-600 font-semibold pl-3 text-sm mt-2 border-b border-gray-100 pb-1">非流動資產</div>}
+                            {nonCurrentAssets.map(a => (
+                                <div key={a.id} className="flex justify-between pl-6 text-sm mt-1">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+
+                            {otherAssets.length > 0 && <div className="text-gray-600 font-semibold pl-3 text-sm mt-2 border-b border-gray-100 pb-1">其他資產</div>}
+                            {otherAssets.map(a => (
+                                <div key={a.id} className="flex justify-between pl-6 text-sm mt-1">
+                                    <span>{a.name}</span>
+                                    <span>{a.balance.toLocaleString()}</span>
+                                </div>
+                            ))}
+
                             <div className="font-bold text-gray-700 mt-4">負債</div>
                             {liabilities.map(a => (
                                 <div key={a.id} className="flex justify-between pl-4 text-sm">
@@ -1176,6 +1548,95 @@
                                 <span>{(totalLiabilities + totalEquity + bsNetIncome).toLocaleString()}</span>
                             </div>
                         </div>
+                            </div>
+                        )}
+
+                        {/* 現金流量表卡片 */}
+                        {activeReport === 'cf' && (
+                            <div className="card p-6 border border-green-100 shadow-sm">
+                                <div className="flex justify-between items-start mb-4 border-b pb-2">
+                                    <h3 className="text-xl font-bold text-green-700">現金流量表 (Cash Flow Statement)</h3>
+                                </div>
+                                <PeriodSelector 
+                                    label="計算期間"
+                                    mode="range"
+                                    filter={cfFilter} 
+                                    setFilter={setCfFilter} 
+                                    customDates={cfCustomDates} 
+                                    setCustomDates={setCfCustomDates} 
+                                />
+                                <div className="space-y-4 text-sm">
+                                    <div className="flex justify-between font-bold text-gray-700 bg-gray-50 p-3 rounded">
+                                        <span>期初現金及約當現金餘額</span>
+                                        <span className="font-mono">{cfData.begCash.toLocaleString()}</span>
+                                    </div>
+                                    
+                                    <div>
+                                        <div className="font-bold text-gray-700 border-b border-gray-200 pb-1 mb-2">營業活動之現金流量</div>
+                                        <div className="flex justify-between pl-4 text-gray-600 mb-1">
+                                            <span>本期淨利</span>
+                                            <span className="font-mono">{cfData.periodNetIncome.toLocaleString()}</span>
+                                        </div>
+                                        {cfData.caChanges.map(a => (
+                                            <div key={a.id} className="flex justify-between pl-4 text-gray-600 mb-1">
+                                                <span>{a.name} (增加)減少</span>
+                                                <span className="font-mono">{a.change.toLocaleString()}</span>
+                                            </div>
+                                        ))}
+                                        {cfData.clChanges.map(a => (
+                                            <div key={a.id} className="flex justify-between pl-4 text-gray-600 mb-1">
+                                                <span>{a.name} 增加(減少)</span>
+                                                <span className="font-mono">{a.change.toLocaleString()}</span>
+                                            </div>
+                                        ))}
+                                        <div className="flex justify-between font-bold text-green-700 pl-4 border-t border-gray-100 pt-1 mt-1">
+                                            <span>營業活動之淨現金流入(出)</span>
+                                            <span className="font-mono">{cfData.totalOpCash.toLocaleString()}</span>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <div className="font-bold text-gray-700 border-b border-gray-200 pb-1 mb-2">投資活動之現金流量</div>
+                                        {cfData.invChanges.length === 0 && <div className="pl-4 text-gray-400 italic">無</div>}
+                                        {cfData.invChanges.map(a => (
+                                            <div key={a.id} className="flex justify-between pl-4 text-gray-600 mb-1">
+                                                <span>{a.name} (增加)減少</span>
+                                                <span className="font-mono">{a.change.toLocaleString()}</span>
+                                            </div>
+                                        ))}
+                                        <div className="flex justify-between font-bold text-green-700 pl-4 border-t border-gray-100 pt-1 mt-1">
+                                            <span>投資活動之淨現金流入(出)</span>
+                                            <span className="font-mono">{cfData.totalInvCash.toLocaleString()}</span>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <div className="font-bold text-gray-700 border-b border-gray-200 pb-1 mb-2">籌資活動之現金流量</div>
+                                        {cfData.finChanges.length === 0 && <div className="pl-4 text-gray-400 italic">無</div>}
+                                        {cfData.finChanges.map(a => (
+                                            <div key={a.id} className="flex justify-between pl-4 text-gray-600 mb-1">
+                                                <span>{a.name} 增加(減少)</span>
+                                                <span className="font-mono">{a.change.toLocaleString()}</span>
+                                            </div>
+                                        ))}
+                                        <div className="flex justify-between font-bold text-green-700 pl-4 border-t border-gray-100 pt-1 mt-1">
+                                            <span>籌資活動之淨現金流入(出)</span>
+                                            <span className="font-mono">{cfData.totalFinCash.toLocaleString()}</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex justify-between font-bold text-gray-800 bg-green-50 p-3 rounded">
+                                        <span>本期現金及約當現金淨增減</span>
+                                        <span className="font-mono">{cfData.netCashChange.toLocaleString()}</span>
+                                    </div>
+                                    
+                                    <div className="flex justify-between font-bold text-lg text-green-700 border-t-2 border-green-200 pt-3">
+                                        <span>期末現金及約當現金餘額</span>
+                                        <span className="font-mono">{cfData.endCash.toLocaleString()}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
