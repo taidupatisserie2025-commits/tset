@@ -304,6 +304,22 @@
                 }));
             };
 
+            const updateEntry = (updatedEntry) => {
+                setAllEntries(prev => ({
+                    ...prev,
+                    [selectedYear]: (prev[selectedYear] || []).map(e => e.id === updatedEntry.id ? updatedEntry : e)
+                }));
+            };
+
+            const deleteEntry = (id) => {
+                if (confirm('確定要刪除這筆傳票嗎？此動作無法復原！')) {
+                    setAllEntries(prev => ({
+                        ...prev,
+                        [selectedYear]: (prev[selectedYear] || []).filter(e => e.id !== id)
+                    }));
+                }
+            };
+
             const addCoa = (newCoa) => {
                 if (coa.some(a => a.id === newCoa.id)) {
                     alert('會計科目編號已存在！');
@@ -463,7 +479,7 @@
                     <main className="max-w-5xl mx-auto">
                         {mainTab === 'accounting' ? (
                             <>
-                                {view === 'journal' && <JournalView entries={entries} coa={coa} onAddEntry={addEntry} selectedYear={selectedYear} onAddAsset={(a) => setAssetsData(prev => [...prev, a])} />}
+                                {view === 'journal' && <JournalView entries={entries} coa={coa} onAddEntry={addEntry} onUpdateEntry={updateEntry} onDeleteEntry={deleteEntry} selectedYear={selectedYear} onAddAsset={(a) => setAssetsData(prev => [...prev, a])} />}
                                 {view === 'reports' && <ReportsView allEntries={allEntries} coa={coa} selectedYear={selectedYear} />}
                                 {view === 'ledger' && <LedgerView allEntries={allEntries} coa={coa} />}
                                 {view === 'coa' && <CoaView coa={coa} onAddCoa={addCoa} onUpdateCoa={updateCoa} onDeleteCoa={deleteCoa} />}
@@ -706,8 +722,9 @@
 
         // --- 子組件 ---
 
-        function JournalView({ entries, coa, onAddEntry, selectedYear, onAddAsset }) {
+        function JournalView({ entries, coa, onAddEntry, selectedYear, onAddAsset, onUpdateEntry, onDeleteEntry }) {
             const [showForm, setShowForm] = useState(false);
+            const [editingEntryId, setEditingEntryId] = useState(null);
             const [pendingAssets, setPendingAssets] = useState([]);
             const [currentPendingAsset, setCurrentPendingAsset] = useState(null);
 
@@ -797,6 +814,7 @@
                                     <th className="p-4 border-b">摘要</th>
                                     <th className="p-4 border-b text-right">借方</th>
                                     <th className="p-4 border-b text-right">貸方</th>
+                                    <th className="p-4 border-b text-center w-24">操作</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -807,33 +825,61 @@
                                 ) : (
                                     entries.map(entry => (
                                         <React.Fragment key={entry.id}>
-                                            {entry.lines.map((line, idx) => (
-                                                <tr key={idx} className="border-b last:border-b-0 hover:bg-gray-50">
-                                                    {idx === 0 && (
-                                                        <>
-                                                            <td className="p-4 font-medium text-gray-600 align-top" rowSpan={entry.lines.length}>
-                                                                <div className="text-coffee-600 font-mono text-sm font-bold">#{entry.id}</div>
-                                                                <div className="text-[10px] text-gray-400 font-normal mt-0.5">{entry.date}</div>
-                                                            </td>
-                                                            <td className="p-4 text-base font-medium text-gray-800 align-top" rowSpan={entry.lines.length}>
-                                                                {entry.description}
-                                                            </td>
-                                                        </>
-                                                    )}
-                                                    <td className={`p-4 ${line.type === 'credit' ? 'pl-12' : 'pl-4'}`}>
-                                                        <span className="font-medium text-gray-700">{line.accountName}</span>
-                                                    </td>
-                                                    <td className="p-4 text-sm text-gray-400 italic">
-                                                        {line.lineDescription || ''}
-                                                    </td>
-                                                    <td className="p-4 text-right font-mono">
-                                                        {line.type === 'debit' ? line.amount.toLocaleString() : ''}
-                                                    </td>
-                                                    <td className="p-4 text-right font-mono">
-                                                        {line.type === 'credit' ? line.amount.toLocaleString() : ''}
+                                            {editingEntryId === entry.id ? (
+                                                <tr>
+                                                    <td colSpan="7" className="p-0 border-b">
+                                                        <div className="bg-amber-50 p-6 border-l-4 border-amber-400">
+                                                            <div className="flex justify-between items-center mb-4 text-amber-800 font-bold">
+                                                                <h4>正在編輯傳票 #{entry.id}</h4>
+                                                            </div>
+                                                            <EntryForm 
+                                                                coa={coa} 
+                                                                entries={entries} 
+                                                                selectedYear={selectedYear}
+                                                                initialData={entry}
+                                                                onSave={(updatedEntry) => { onUpdateEntry(updatedEntry); setEditingEntryId(null); }}
+                                                                onCancel={() => setEditingEntryId(null)}
+                                                            />
+                                                        </div>
                                                     </td>
                                                 </tr>
-                                            ))}
+                                            ) : (
+                                                entry.lines.map((line, idx) => (
+                                                    <tr key={`${entry.id}-${idx}`} className="border-b last:border-b-0 hover:bg-gray-50 group">
+                                                        {idx === 0 && (
+                                                            <>
+                                                                <td className="p-4 font-medium text-gray-600 align-top" rowSpan={entry.lines.length}>
+                                                                    <div className="text-coffee-600 font-mono text-sm font-bold">#{entry.id}</div>
+                                                                    <div className="text-[10px] text-gray-400 font-normal mt-0.5">{entry.date}</div>
+                                                                </td>
+                                                                <td className="p-4 text-base font-medium text-gray-800 align-top" rowSpan={entry.lines.length}>
+                                                                    {entry.description}
+                                                                </td>
+                                                            </>
+                                                        )}
+                                                        <td className={`p-4 ${line.type === 'credit' ? 'pl-12' : 'pl-4'}`}>
+                                                            <span className="font-medium text-gray-700">{line.accountName}</span>
+                                                        </td>
+                                                        <td className="p-4 text-sm text-gray-400 italic">
+                                                            {line.lineDescription || ''}
+                                                        </td>
+                                                        <td className="p-4 text-right font-mono">
+                                                            {line.type === 'debit' ? line.amount.toLocaleString() : ''}
+                                                        </td>
+                                                        <td className="p-4 text-right font-mono">
+                                                            {line.type === 'credit' ? line.amount.toLocaleString() : ''}
+                                                        </td>
+                                                        {idx === 0 && (
+                                                            <td className="p-4 align-top text-center" rowSpan={entry.lines.length}>
+                                                                <div className="flex flex-col gap-2 justify-start items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                    <button onClick={() => setEditingEntryId(entry.id)} className="px-3 py-1 text-xs bg-white text-blue-600 border border-blue-200 rounded hover:bg-blue-50 shadow-sm font-bold w-full">編輯</button>
+                                                                    <button onClick={() => onDeleteEntry(entry.id)} className="px-3 py-1 text-xs bg-white text-red-500 border border-red-200 rounded hover:bg-red-50 shadow-sm font-bold w-full">刪除</button>
+                                                                </div>
+                                                            </td>
+                                                        )}
+                                                    </tr>
+                                                ))
+                                            )}
                                         </React.Fragment>
                                     ))
                                 )}
@@ -908,21 +954,22 @@
             );
         }
 
-        function EntryForm({ coa, entries, onSave, selectedYear }) {
-            const [date, setDate] = useState(`${selectedYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`);
-            const [description, setDescription] = useState('');
-            const [lines, setLines] = useState([
+        function EntryForm({ coa, entries, onSave, selectedYear, initialData, onCancel }) {
+            const [date, setDate] = useState(initialData?.date || '');
+            const [description, setDescription] = useState(initialData?.description || '');
+            const [lines, setLines] = useState(initialData?.lines || [
                 { accountId: '', amount: 0, type: 'debit', lineDescription: '' },
                 { accountId: '', amount: 0, type: 'credit', lineDescription: '' }
             ]);
 
             useEffect(() => {
-                // 當切換年度時，更新日期選擇器的預設年度
-                const today = new Date();
-                const mm = String(today.getMonth() + 1).padStart(2, '0');
-                const dd = String(today.getDate()).padStart(2, '0');
-                setDate(`${selectedYear}-${mm}-${dd}`);
-            }, [selectedYear]);
+                if (!initialData) {
+                    const today = new Date();
+                    const mm = String(today.getMonth() + 1).padStart(2, '0');
+                    const dd = String(today.getDate()).padStart(2, '0');
+                    setDate(`${selectedYear}-${mm}-${dd}`);
+                }
+            }, [selectedYear, initialData]);
 
             const totalDebit = lines.filter(l => l.type === 'debit').reduce((sum, l) => sum + Number(l.amount), 0);
             const totalCredit = lines.filter(l => l.type === 'credit').reduce((sum, l) => sum + Number(l.amount), 0);
@@ -987,7 +1034,7 @@
                 e.preventDefault();
                 if (!isBalanced) return;
 
-                const voucherId = generateVoucherId(date);
+                const voucherId = initialData ? initialData.id : generateVoucherId(date);
 
                 const entry = {
                     id: voucherId,
@@ -1105,18 +1152,29 @@
                             <button type="button" onClick={() => addLine('credit')} className="text-sm text-red-600 hover:underline">+ 增加貸方</button>
                         </div>
                         <div className="text-right">
-                            <div className="text-sm space-x-4">
+                            <div className="text-sm space-x-4 mb-3">
                                 <span className={totalDebit === totalCredit ? 'text-green-600' : 'text-red-500'}>
                                     借貸平衡：{totalDebit.toLocaleString()} / {totalCredit.toLocaleString()}
                                 </span>
                             </div>
-                            <button 
-                                type="submit" 
-                                disabled={!isBalanced}
-                                className={`mt-2 px-6 py-2 rounded-lg font-bold shadow ${isBalanced ? 'bg-coffee-600 text-white hover:bg-coffee-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
-                            >
-                                儲存分錄
-                            </button>
+                            <div className="flex gap-2 justify-end">
+                                {onCancel && (
+                                    <button 
+                                        type="button" 
+                                        onClick={onCancel}
+                                        className="px-6 py-2 rounded-lg font-bold shadow bg-gray-100 text-gray-500 hover:bg-gray-200 transition"
+                                    >
+                                        取消編輯
+                                    </button>
+                                )}
+                                <button 
+                                    type="submit" 
+                                    disabled={!isBalanced}
+                                    className={`px-6 py-2 rounded-lg font-bold shadow transition ${isBalanced ? 'bg-coffee-600 text-white hover:bg-coffee-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+                                >
+                                    {initialData ? '儲存修改' : '儲存分錄'}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </form>
