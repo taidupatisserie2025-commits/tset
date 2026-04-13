@@ -567,14 +567,18 @@
                             <div className="pt-4 flex flex-col gap-2">
                                 <div className="flex gap-2">
                                     <button 
-                                        onClick={onPull}
+                                        onClick={() => {
+                                            if(window.confirm('確定要從雲端下載並覆蓋本機所有的資料嗎？這將會取代您目前的記帳進度喔！')) onPull();
+                                        }}
                                         disabled={!config.url || isSyncing}
                                         className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-md transition disabled:bg-gray-200"
                                     >
                                         {isSyncing ? '同步中...' : '從雲端下載'}
                                     </button>
                                     <button 
-                                        onClick={onPush}
+                                        onClick={() => {
+                                            if(window.confirm('確定要將目前的資料上傳至雲端嗎？此動作將會覆蓋雲端上的舊紀錄！')) onPush();
+                                        }}
                                         disabled={!config.url || isSyncing}
                                         className="flex-1 py-3 border-2 border-emerald-600 text-emerald-600 rounded-xl font-bold hover:bg-emerald-50 transition disabled:border-gray-200 disabled:text-gray-300"
                                     >
@@ -954,7 +958,23 @@
             };
 
             const addLine = (type) => {
-                setLines([...lines, { accountId: '', amount: 0, type, lineDescription: '' }]);
+                const newLine = { accountId: '', amount: 0, type, lineDescription: '' };
+                const newLines = [...lines];
+                
+                let insertIdx = newLines.length;
+                for (let i = newLines.length - 1; i >= 0; i--) {
+                    if (newLines[i].type === type) {
+                        insertIdx = i + 1;
+                        break;
+                    }
+                }
+                // 若新增借方且目前無借方時，直接加在第一行
+                if (type === 'debit' && insertIdx === newLines.length && !newLines.some(l => l.type === 'debit')) {
+                    insertIdx = 0;
+                }
+                
+                newLines.splice(insertIdx, 0, newLine);
+                setLines(newLines);
             };
 
             const removeLine = (index) => {
