@@ -734,7 +734,7 @@
                 
                 const equipmentKeywords = [
                     { key: '生財設備', cat: '生財設備' },
-                    { key: '租賃物改良', cat: '裝修工程' },
+                    { key: '租賃物改良', cat: '租賃物改良' },
                     { key: '裝修工程', cat: '裝修工程' },
                     { key: '運輸設備', cat: '運輸設備' },
                     { key: '辦公設備', cat: '辦公設備' }
@@ -1892,7 +1892,7 @@
             const [formData, setFormData] = useState({
                 id: crypto.randomUUID(),
                 status: '使用中', // 使用中, 已售出, 閒置
-                category: '生財設備', // 生財設備, 裝修工程, 辦公設備, 運輸設備
+                category: '生財設備', // 生財設備, 裝修工程, 辦公設備, 運輸設備, 租賃物改良
                 name: '',
                 purchaseDate: `${selectedYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
                 totalCost: 0,
@@ -1953,6 +1953,7 @@
                 const stats = {
                     '生財設備': 0,
                     '裝修工程': 0,
+                    '租賃物改良': 0,
                     '辦公設備': 0,
                     '運輸設備': 0,
                     'total': 0
@@ -2125,6 +2126,7 @@
                                     <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full border rounded p-2 text-sm">
                                         <option value="生財設備">生財設備</option>
                                         <option value="裝修工程">裝修工程</option>
+                                        <option value="租賃物改良">租賃物改良</option>
                                         <option value="辦公設備">辦公設備</option>
                                         <option value="運輸設備">運輸設備</option>
                                     </select>
@@ -2292,6 +2294,7 @@
                                     {[
                                         { label: '生財設備', key: '生財設備', icon: '🍞' },
                                         { label: '裝修工程', key: '裝修工程', icon: '🏗️' },
+                                        { label: '租賃物改良', key: '租賃物改良', icon: '🚧' },
                                         { label: '辦公設備', key: '辦公設備', icon: '💻' },
                                         { label: '運輸設備', key: '運輸設備', icon: '🚚' }
                                     ].map(item => (
